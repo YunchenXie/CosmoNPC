@@ -5,11 +5,169 @@ import logging
 from .math_funcs import *
 import gc
 
+def calculate_bk_sco_box(rfield, stat_attrs, comm, **kwargs):
+    rank = comm.Get_rank()
+
+    # Extract mesh attributes
+    poles = stat_attrs['poles']
+    boxsize, nmesh = np.array(stat_attrs['boxsize']), np.array(stat_attrs['nmesh'])
+    # boxcenter = np.array(stat_attrs['boxcenter'])
+    k_min, k_max, k_bins = stat_attrs['k_min'], stat_attrs['k_max'], stat_attrs['k_bins']
+    sampler, interlaced = stat_attrs['sampler'], stat_attrs['interlaced']
+    P_shot = stat_attrs['P_shot']
+    NZ = stat_attrs['NZ']
+    rsd = np.array(stat_attrs['rsd'])
+
+    if rank == 0:
+        logging.info(f"Rank {rank}: Using rsd = {rsd}.")
+
+    # Define some useful variables
+    k_edge = np.linspace(k_min, k_max, k_bins + 1)
+    k_center = 0.5 * (k_edge[:-1] + k_edge[1:])
+    dk = (k_max - k_min) / k_bins
+
+    if rank == 0:
+        logging.info(f"Rank {rank}: k_edge = {k_edge}")
+    comm.Barrier()
+
+    # Calculate the Fourier transform of the density field
+    cfield = rfield.r2c()
+    # Compensate the cfield depending on the type of mesh
+    compensation = get_compensation(interlaced, sampler)
+    cfield.apply(out=Ellipsis, func=compensation[0][1], kind=compensation[0][2])
+    if rank == 0:
+        logging.info(f"{compensation[0][1].__name__} applied to the density field")
+
+    # Validate the poles
+    validate_poles(poles)
+
+    # Get the kgrid, knorm for binning and Legendre polynomials
+    if poles == [0]:  # For ell = 0 only, we do not need to calculate the kgrid
+        knorm = np.sqrt(sum(np.real(kk)**2 for kk in cfield.x))
+        kgrid = None
+    else:
+        kgrid, knorm = get_kgrid(cfield)
+
+    # clear zero-mode in the Fourier space
+    cfield[knorm == 0.] = 0.
+    if rank == 0:
+        logging.info(f"Rank {rank}: Zero-mode in Fourier space cleared")
+
+
+    """ 
+        Before getting the bispectrum, we firstly get the power spectrum monopole
+        as well as k_eff, k_num for the bk shot noise
+    """
+    P_field = np.real(cfield[:])**2 + np.imag(cfield[:])**2
+
+    results = {} if rank == 0 else None
+
+    """
+    Note that poles at least contain one even number...
+    """
+    binned_F0x_list = get_binned_ifft_field(cfield, k_bins, k_edge, knorm, 0, comm)
+
+
+    # Loop over the poles
+    for pole in poles:
+        if rank == 0:
+            logging.info(f"Rank {rank}: Processing pole {pole}")
+
+        if pole & 1:
+            # for ell = odd, the multipoles are 0 strictly
+            res = np.zeros(k_bins).astype("float128")
+            if rank == 0:
+                logging.info(f"Rank {rank}: ell = {pole}, Odd multipoles are automatically set to zero")
+        else:
+            if pole == 0:
+                binned_list_k1 = binned_F0x_list
+                F_ell = None
+            else:
+                L_ells = get_legendre(pole, rsd[0], rsd[1], rsd[2])
+                if rank == 0:
+                    logging.info(f"Rank {rank}: L_ells = {L_ells.expr}")
+                F_ell = cfield * L_ells(kgrid[0], kgrid[1], kgrid[2])
+                binned_list_k1 = get_binned_ifft_field(F_ell, k_bins, k_edge, knorm, pole, comm)
+            binned_list_k2 = binned_F0x_list
+            binned_list_k3 = binned_F0x_list
+
+    # loop over all possible combinations of binned_list_k1, k2, k3
+    # with k1 >= k2 >= k3
+
+        sub_res,tri_config, N_tri= [], [] ,[]
+
+        for i in range(k_bins):
+            for j in range(i, k_bins):
+                for k in range(j, k_bins):
+                    # if rank == 0:
+                    #     logging.info(f"Rank {rank}: Processing bins with index: {i}, {j}, {k}")
+                    # get the bispectrum
+                    sub_res.append(np.sum(binned_list_k1[i] * binned_list_k2[j] * binned_list_k3[k]))
+                    tri_config.append((i, j, k))
+                    N_tri.append(8 * np.pi**2 *k_center[i] * k_center[j] * k_center[k] * dk **6)
+
+        sub_res = np.array(sub_res).astype("float128")
+        
+        # Gather the results from all ranks
+        bk_res = comm.reduce(sub_res, op=MPI.SUM, root=0)
+
+        # get NT, the number of triangles
+        if rank == 0:
+            N_tri = np.array(N_tri)
+            bk_res *= (2* pole + 1) / N_tri
+            # vol_per_cell / boxsize.prod() = 1 / nmesh.prod()
+            bk_res *= 1/nmesh.prod()  # we need further check this
+            
+            # store the results
+            results.update({
+                f'B{pole}': bk_res,
+            })
+            logging.info(f"Rank {rank}: B{pole} calculated")
+            if "N_tri" not in results:
+                results["N_tri"] = N_tri
+                logging.info(f"Rank {rank}: N_tri stored")
+            if "tri_config" not in results:
+                results["tri_config"] = tri_config
+                logging.info(f"Rank {rank}: tri_config stored")
+
+    # Free memory
+    del cfield, P_field, binned_F0x_list, binned_list_k1, binned_list_k2, binned_list_k3
+    gc.collect()
+    if rank == 0:
+        logging.info(f"Rank {rank}: Finished processing all poles")
+        return results
+    else:
+        return None
+        
+
+            
+def get_binned_ifft_field(kfield, k_bins, k_edge, knorm, pole, comm):
+    """
+    Get the binned inverse Fourier transform of the density field
+    """
+    rank = comm.Get_rank()
+
+    list_to_return = []
+    # Loop over the bins and sum the values in each bin
+    for i in range(k_bins):
+        mask = np.logical_and(knorm >= k_edge[i], knorm < k_edge[i+1])
+        if pole == 0:
+            list_to_return.append(np.real((kfield * mask).c2r())) # it is strictly to be real
+        else:
+            list_to_return.append(2 * np.real((kfield * mask).c2r())) # for G_ell, we take the real part and double it
+    del mask
+    gc.collect()
+
+    if rank == 0:
+        logging.info(f"Rank {rank}: Mesh shape of binned ifft field = {list_to_return[0].shape}")
+
+    return list_to_return
+
+
 
 
 def calculate_power_spectrum_survey(rfield, stat_attrs, comm, **kwargs):
     rank = comm.Get_rank()
-    size = comm.Get_size()
 
     # Extract mesh attributes
     poles = stat_attrs['poles']
@@ -59,8 +217,8 @@ def calculate_power_spectrum_survey(rfield, stat_attrs, comm, **kwargs):
     total_knorm_sum = comm.reduce(sub_knorm_sum, op=MPI.SUM, root=0)
     if rank == 0:
         k_eff = total_knorm_sum / k_num
-        logging.info(f"Rank {rank}: k_eff = {k_eff}")
-        logging.info(f"Rank {rank}: k_num = {k_num}")
+        # logging.info(f"Rank {rank}: k_eff = {k_eff}")
+        # logging.info(f"Rank {rank}: k_num = {k_num}")
     results = {'k_eff': k_eff, "k_num":k_num} if rank == 0 else None
 
     
@@ -115,7 +273,6 @@ def calculate_power_spectrum_survey(rfield, stat_attrs, comm, **kwargs):
 
 def calculate_power_spectrum_box(rfield, stat_attrs, comm, **kwargs):
     rank = comm.Get_rank()
-    size = comm.Get_size()
 
     # Extract mesh attributes
     poles = stat_attrs['poles']
@@ -178,8 +335,7 @@ def calculate_power_spectrum_box(rfield, stat_attrs, comm, **kwargs):
     total_knorm_sum = comm.reduce(sub_knorm_sum, op=MPI.SUM, root=0)
     if rank == 0:
         k_eff = total_knorm_sum / k_num
-        logging.info(f"Rank {rank}: k_eff = {k_eff}")
-        logging.info(f"Rank {rank}: k_num = {k_num}")
+
     results = {'k_eff': k_eff, "k_num":k_num} if rank == 0 else None
 
     # Loop over the poles
@@ -249,7 +405,6 @@ def get_G_ell(rfield, ell, kgrid, xgrid,compensation,boxsize,comm):
     +\sum_{m=1}^\ell F_\ell^m(\mathbf{k})\right]
     """
     rank = comm.Get_rank()
-    size = comm.Get_size()
 
     Ylms = [get_Ylm(ell, m) for m in range(ell + 1)]
     rf = rfield * Ylms[0](xgrid[0], xgrid[1], xgrid[2])
