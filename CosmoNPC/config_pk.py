@@ -35,15 +35,15 @@ CONFIG = {
     # sampler: Mesh sampling: "tsc", "cic", "pcs"
     "sampler": "tsc",
     # interlaced: Interlaced mesh sampling
-    "interlaced": False,
+    "interlaced": True,
 
     # Para_task
     # k_min: Min k (h/Mpc)
     "k_min": 0.0,
     # k_max: Max k (h/Mpc)
-    "k_max": 0.3,
+    "k_max": 0.6,
     # k_bins: k-space bins
-    "k_bins": 30,
+    "k_bins": 60,
     # poles: Multipole orders
     "poles": [0, 2],
     # compensation: Mesh compensation

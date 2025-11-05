@@ -40,8 +40,6 @@ def npy_reader(data_path,comm):
     # logging the shape of the data read by each rank
     logging.info(f"Reading .npy data from disk, Rank {rank}: Rows {start_row} to {end_row-1}, shape {local_data.shape}")
 
-    if rank ==0:
-        print(local_data[:5])
     return local_data
 
 

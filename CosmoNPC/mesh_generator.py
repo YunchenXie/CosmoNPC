@@ -21,7 +21,6 @@ def get_mesh_box(catalogs, correlation_mode, nmesh, geometry, boxsize,
     """
     rank = comm.Get_rank()
 
-    print("*"*20, "rank = ",rank)
 
     Nmesh = np.array(nmesh)
     BoxSize = np.array(boxsize)
@@ -35,7 +34,6 @@ def get_mesh_box(catalogs, correlation_mode, nmesh, geometry, boxsize,
     NZ_a = weight_sum_a / np.prod(BoxSize) if rank == 0 else None
 
 
-    print("*"*50,data_a.shape)
 
     if correlation_mode == "cross":
         data_b = catalog_reader(catalogs["data_b"], geometry, column_names, None, None, None, comm)
@@ -63,19 +61,19 @@ def get_mesh_box(catalogs, correlation_mode, nmesh, geometry, boxsize,
     mesh_attrs = comm.bcast(mesh_attrs, root=0)
 
     # Mesh generation
-    pm = ParticleMesh(BoxSize=BoxSize, Nmesh=Nmesh, dtype='complex128', resampler='tsc',comm=comm)
-    # note that, the dtype here must be complex, otherwise, the r2c will be wrong
+    # pm = ParticleMesh(BoxSize=BoxSize, Nmesh=Nmesh, dtype='complex128', resampler='tsc',comm=comm)
+    # # note that, the dtype here must be complex, otherwise, the r2c will be wrong
 
+    # # decompose positions and paint to mesh
+    # layout_a = pm.decompose(data_a['Position'])
 
-    # decompose positions and paint to mesh
-    layout_a = pm.decompose(data_a['Position'])
+    # rfield_a = pm.paint(data_a['Position'], mass=data_a['WEIGHT'],layout=layout_a)
 
-    rfield_a = pm.paint(data_a['Position'], mass=data_a['WEIGHT'],layout=layout_a)
+    rfield_a = pm_painter(data_a['Position'], data_a['WEIGHT'], Nmesh, BoxSize, sampler, interlaced, comm)
 
 
     if correlation_mode == "cross":
-        layout_b = pm.decompose(data_b['Position'])
-        rfield_b = pm.paint(data_b['Position'], mass=data_b['WEIGHT'],layout=layout_b)
+        rfield_b = pm_painter(data_b['Position'], data_b['WEIGHT'], Nmesh, BoxSize, sampler, interlaced, comm)
     else:
         rfield_b = None
 
@@ -86,19 +84,55 @@ def get_mesh_box(catalogs, correlation_mode, nmesh, geometry, boxsize,
         del data_b
     gc.collect()
 
-    # if rank == 0:
-    #     print(np.array(rfield_a)[:5,:5,:5])
-    #     print(rfield_a.x)
-    #     print(rfield_a.i)
-    # print("shape of rfield_a:", rfield_a.shape, "in Rank ", rank)
-    
-    print(f"rank {rank}: sum of rfield_a = {np.sum(np.array(rfield_a))}")
-
     return mesh_attrs, rfield_a, rfield_b
 
 
 
+def pm_painter(Position, WEIGHT, Nmesh, BoxSize, sampler,interlaced,comm, boxcenter = None):
+    """
+    Paint particles onto a mesh using ParticleMesh.
+    Returns:
+        rfield (ndarray): Painted mesh field.
+    """
+    rank = comm.Get_rank()
 
+    if boxcenter is not None:
+        Position = Position - boxcenter  # to be checked later
+        logging.info(f"Shift positions by boxcenter {boxcenter}")
+
+    pm = ParticleMesh(BoxSize=BoxSize, Nmesh=Nmesh, dtype='complex128', resampler=sampler, comm=comm)
+
+    if not interlaced:
+        lay = pm.decompose(Position, smoothing=0.5 * pm.resampler.support)
+    else:
+        lay = pm.decompose(Position,smoothing= 1.0 * pm.resampler.support)
+
+    # p = lay.exchange(Position)
+    # w = lay.exchange(WEIGHT)
+
+    if not interlaced:
+        rfield = pm.paint(Position, mass=WEIGHT, layout=lay)
+    else:
+        shifted = pm.affine.shift(0.5)
+        c1 = pm.paint(Position, mass=WEIGHT, layout=lay).r2c()
+        c2 = pm.paint(Position, mass=WEIGHT, transform=shifted, layout=lay).r2c()
+        logging.info(f"Interlaced painting done in Rank {rank}")
+        logging.info(f"R2C done in Rank {rank}, start combining fields")
+
+        # 2. Combine the two fields in the Fourier domain
+        H = pm.BoxSize / pm.Nmesh
+        for k, s1, s2 in zip(c1.slabs.x, c1.slabs, c2.slabs):
+            kH = sum(k[i] * H[i] for i in range(3))  # compute k·H (wavevector dot cell size)
+            # Core merging formula: weighted average with phase correction
+            s1[...] = s1[...] * 0.5 + s2[...] * 0.5 * np.exp(0.5 * 1j * kH)
+        rfield = c1.c2r()
+
+        del c1, c2
+        gc.collect()
+
+    return rfield
+
+ 
 def get_mesh_pk_survey(catalogs, correlation_mode, nmesh, geometry, column_names, boxsize, sampler, \
                 interlaced,z_range, comp_weight_plan, para_cosmo,comm):
     
