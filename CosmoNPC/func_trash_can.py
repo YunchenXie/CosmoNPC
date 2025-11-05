@@ -1,5 +1,5 @@
 
-def get_mesh_pk_survey(catalogs, nmesh,geometry, column_names, boxsize, sampler, \
+def get_mesh_pk_survey(catalogs, nmesh, geometry, column_names, boxsize, sampler, \
                 interlaced,z_range, comp_weight_plan, para_cosmo,comm):
     
     """

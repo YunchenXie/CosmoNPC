@@ -3,6 +3,7 @@ import yaml
 import numpy as np
 from mpi4py import MPI
 from CosmoNPC import run_task
+from CosmoNPC.config_pk import CONFIG
 
 # Initialize MPI
 comm = MPI.COMM_WORLD
@@ -11,69 +12,39 @@ size = comm.Get_size()
 
 
 def main():
-    config = load_config('config_box_npy.yaml')
-    
-    geometry = config['geometry']
-    column_names = config['column_names']
-    tasks = config['tasks']
-    catalogs = config['catalogs']
-    rsd = config['rsd']
-    nmesh = config['mesh']['nmesh']
-    sampler = config['mesh']['sampler']
-    interlaced = config['mesh']['interlaced']
-    boxsize = config['mesh']['boxsize']
-    statistic = config['statistic']
-    para_cosmo = config['para_cosmo']
-    z_range = config['z_range']
-    comp_weight_plan = config['comp_weight_plan']
-    output_dir = config['output']['directory']
-    
-    
-    validate_config(config)
-
-    
-
-    create_output_dir(output_dir)
-
-    task = next((t for t in tasks if t['name'] == statistic), None)
-    if task is None:
-        print(f"Rank {rank}: No task found for statistic '{statistic}'")
-    else:
-        task_name = task['name']
-        task_params = {k: v for k, v in task.items() if k != 'name'}
-        result = run_task(
-            task_name,
-            geometry=geometry,
-            catalogs=catalogs,
-            rsd=rsd,
-            column_names=column_names,
-            nmesh=nmesh,
-            boxsize=boxsize,
-            sampler=sampler,
-            interlaced=interlaced,
-            comp_weight_plan=comp_weight_plan,
-            z_range=z_range,
-            para_cosmo=para_cosmo,
-            output_dir=output_dir,
-            **task_params
-        )
+    # check the configuration and create output directory
+    validate_config(CONFIG)
+    catalog_check(CONFIG['catalogs'], CONFIG['geometry'], \
+                  CONFIG['correlation_mode'], CONFIG['statistic'])
+    if rank == 0:
+        os.makedirs(CONFIG['output_dir'], exist_ok=True)
+        
+    run_task(**CONFIG)
 
 
-# Load the YAML configuration file
-def load_config(file_path):
-    with open(file_path, 'r') as f:
-        return yaml.safe_load(f)
 
 def validate_config(config):
-    assert config['mesh']['sampler'] in ['cic', 'pcs', 'tsc'], \
+    assert config['sampler'] in ['cic', 'pcs', 'tsc'], \
         "sampler should be 'cic', 'pcs', or 'tsc'"
-    Cubic_Check(config['mesh']['nmesh'], "nmesh", int)
-    Cubic_Check(config['mesh']['boxsize'], "boxsize", (float, int))
+    Cubic_Check(config['nmesh'], "nmesh", int)
+    Cubic_Check(config['boxsize'], "boxsize", (float, int))
 
-def create_output_dir(output_dir):
-    if rank == 0:
-        os.makedirs(output_dir, exist_ok=True)
-
+# Function to check the catalogs based on geometry and correlation mode
+def catalog_check(catalogs, geometry, correlation_mode, statistic):
+    assert catalogs['data_a'] is not None, "data_a catalog must be provided"
+    if statistic in ['ok', 'bk_sco', 'bk_sugi']:
+        if correlation_mode == "auto":
+            if geometry == "survey-like":
+                assert catalogs['randoms_a'] is not None, \
+                    "randoms_a catalog must be provided for survey-like auto-correlation"
+        elif correlation_mode == "cross":
+            # for now we only support cross-correlation between two different tracers
+            assert catalogs['data_b'] is not None, "data_b catalog must be provided for cross-correlation"
+            if geometry == "survey-like":
+                assert catalogs['randoms_a'] is not None, \
+                    "randoms_a catalog must be provided for survey-like cross-correlation"
+                assert catalogs['randoms_b'] is not None, \
+                    "randoms_b catalog must be provided for survey-like cross-correlation"
 
 # Function to check if a value is a cubic number
 def Cubic_Check(value, value_name, value_type):

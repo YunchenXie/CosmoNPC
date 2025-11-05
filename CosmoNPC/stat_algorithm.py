@@ -102,9 +102,11 @@ def calculate_bk_sco_box(rfield, stat_attrs, comm, **kwargs):
                     # if rank == 0:
                     #     logging.info(f"Rank {rank}: Processing bins with index: {i}, {j}, {k}")
                     # get the bispectrum
-                    sub_res.append(np.sum(binned_list_k1[i] * binned_list_k2[j] * binned_list_k3[k]))
-                    tri_config.append((i, j, k))
-                    N_tri.append(8 * np.pi**2 *k_center[i] * k_center[j] * k_center[k] * dk **6)
+                    if i + j >= k-1:
+                        sub_res.append(np.sum(binned_list_k1[i] * binned_list_k2[j] * binned_list_k3[k]))
+                        tri_config.append((i, j, k))
+                        # $ V_T^{ANA} = 8\pi^2k_1k_2k_3\Delta k^3 $
+                        N_tri.append(8 * np.pi**2 *k_center[i] * k_center[j] * k_center[k] * dk **3)
 
         sub_res = np.array(sub_res).astype("float128")
         
@@ -115,8 +117,8 @@ def calculate_bk_sco_box(rfield, stat_attrs, comm, **kwargs):
         if rank == 0:
             N_tri = np.array(N_tri)
             bk_res *= (2* pole + 1) / N_tri
-            # vol_per_cell / boxsize.prod() = 1 / nmesh.prod()
-            bk_res *= 1/nmesh.prod()  # we need further check this
+            vol_per_cell = boxsize.prod() / nmesh.prod()
+            bk_res *= vol_per_cell**3 / boxsize.prod() # we need further check this
             
             # store the results
             results.update({
@@ -271,7 +273,8 @@ def calculate_power_spectrum_survey(rfield, stat_attrs, comm, **kwargs):
 
 
 
-def calculate_power_spectrum_box(rfield, stat_attrs, comm, **kwargs):
+def calculate_power_spectrum_box(rfield_a, rfield_b, correlation_mode, \
+                                 stat_attrs, comm, **kwargs):
     rank = comm.Get_rank()
 
     # Extract mesh attributes
@@ -280,8 +283,13 @@ def calculate_power_spectrum_box(rfield, stat_attrs, comm, **kwargs):
     k_min, k_max, k_bins = stat_attrs['k_min'], stat_attrs['k_max'], stat_attrs['k_bins']
     sampler, interlaced = stat_attrs['sampler'], stat_attrs['interlaced']
     P_shot = stat_attrs['P_shot']
-    NZ = stat_attrs['NZ']
     rsd = np.array(stat_attrs['rsd'])
+
+    if correlation_mode == "cross":
+        NZ_a = stat_attrs['NZ_a']
+        NZ_b = stat_attrs['NZ_b']
+    else:
+        NZ_a = stat_attrs['NZ_a']
 
     if rank == 0:
         logging.info(f"Rank {rank}: Using rsd = {rsd}.")
@@ -292,37 +300,57 @@ def calculate_power_spectrum_box(rfield, stat_attrs, comm, **kwargs):
         logging.info(f"Rank {rank}: k_edge = {k_edge}")
     comm.Barrier()
 
-    # Calculate the Fourier transform of the density field
-    cfield = rfield.r2c()
-    # Compensate the cfield depending on the type of mesh
+
+    # get the compensation mode
     compensation = get_compensation(interlaced, sampler)
-    cfield.apply(out=Ellipsis, func=compensation[0][1], kind=compensation[0][2])
+
+    # Calculate the Fourier transform of the density field and compensate it
+
+
+    cfield_a =  rfield_a.r2c()
+    cfield_a.apply(out=Ellipsis, func=compensation[0][1], kind=compensation[0][2])
     if rank == 0:
-        logging.info(f"{compensation[0][1].__name__} applied to the density field")
+        logging.info(f"Rank {rank}: {compensation[0][1].__name__} applied to the density field")
 
 
+    if correlation_mode == "cross":
+        cfield_b =  rfield_b.r2c()
+        cfield_b.apply(out=Ellipsis, func=compensation[0][1], kind=compensation[0][2])
+        if rank == 0:
+            logging.info(f"Rank {rank}: {compensation[0][1].__name__} applied to the density field")
+    else:
+        cfield_b = cfield_a
     
     # Validate the poles
     validate_poles(poles)
 
+    print("the shape of cfield_a:", cfield_a.shape, "in Rank ", rank)
+    print("the shape of cfield_b:", cfield_b.shape, "in Rank ", rank)
+
     # Get the kgrid, knorm for binning and Legendre polynomials
     if poles == [0]:  # For ell = 0 only, we do not need to calculate the kgrid
-        knorm = np.sqrt(sum(np.real(kk)**2 for kk in cfield.x))
+        knorm = np.sqrt(sum(np.real(kk)**2 for kk in cfield_a.x))
         kgrid = None
     else:
-        kgrid, knorm = get_kgrid(cfield)
+        kgrid, knorm = get_kgrid(cfield_a)
 
     # clear zero-mode in the Fourier space
-    cfield[knorm == 0.] = 0. 
+    # note that even for cross power spectrum, we only need to clear the zero-mode of cfield_a
+    cfield_a[knorm == 0.] = 0. 
     if rank == 0:
         logging.info(f"Rank {rank}: Zero-mode in Fourier space cleared")
 
-
-    P_field = np.real(cfield[:])**2 + np.imag(cfield[:])**2
-
+    P_field = np.real(cfield_a[:]) * np.real(cfield_b[:]) + np.imag(cfield_a[:]) * np.imag(cfield_b[:])
+    """
+        This operation is not very obvious, however since we are summing over all k-modes in a 
+        spherical shell(with thickness), one can prove that for 2 opposite points in the k-space, we have
+        $F_{a}(\mathbf{k})F_{b}^*(\mathbf{k}) = \left [ F_{a}(-\mathbf{k})F_{b}^*(-\mathbf{k})  \right ] ^*$
+        thus when summing over all k-modes in the shell, the imaginary part will be cancelled out
+        here we used the hermitian symmetry of the Fourier transform of real fields
+    """
 
     # save some memory, cfield, rfield are not needed anymore
-    del cfield, rfield
+    del rfield_a, rfield_b, cfield_a, cfield_b
     gc.collect()
 
 
@@ -362,16 +390,24 @@ def calculate_power_spectrum_box(rfield, stat_attrs, comm, **kwargs):
 
             if rank == 0:
                 res = total_sum / k_num
-                res *= boxsize.prod() 
+                if correlation_mode == "auto":
+                    res *= boxsize.prod() **(-1)  * (nmesh.prod()**2) / NZ_a**2
+                else:
+                    res *= boxsize.prod() **(-1)  * nmesh.prod()**2 / (NZ_a * NZ_b)
                 """
-                This correction see: 
-                https://nbodykit.readthedocs.io/en/latest/_modules/nbodykit/algorithms/fftpower.html#FFTPower
-                or we can interpret it as, for the fft operation, just like the survey-like case,
-                we need correct the boxsize.prod()**2, however,
-                similar to the survey case divided by I_norm, we need to divide Volume
-                since by definition
-                $P(\mathbf{k})=\frac{|\delta(\mathbf{k})|^2}{V}$
-                conbined with this 2 corrections, we finally get the boxsize.prod()
+                    This correction see: 
+                    https://nbodykit.readthedocs.io/en/latest/_modules/nbodykit/algorithms/fftpower.html#FFTPower
+                    firstly, for every overdensity field, we need to multiply a factor 
+                    nmesh.prod()/N_gal = (nmesh.prod()/N_Z * boxsize.prod())
+                    to recover 1+\delta at every grid point 
+                    then for the fft operation, just like the survey-like case,
+                    we need correct the boxsize.prod()**2, however,
+                    similar to the survey case divided by I_norm, we need to divide Volume
+                    since by definition
+                    $P(\mathbf{k})=\frac{|\delta(\mathbf{k})|^2}{V}$
+                    combined with this 2 corrections, we finally get the total correction factor
+                    boxsize.prod() **(-1)  * (nmesh.prod()**2) / NZ^2 for auto-power spectrum
+                    and boxsize.prod() **(-1)  * (nmesh.prod()**2) / (NZ_a * NZ_b) for cross-power spectrum
                 """
                 if pole == 0:
                     res -= P_shot
@@ -453,8 +489,8 @@ def get_kbin_count(k_bins, k_edge, knorm):
     Count the number of points as well as the sum k-distance in each k-bin 
     """
     # Initialize the result array
-    sub_count = np.zeros(k_bins).astype("float128")
-    sub_knorm_sum = np.zeros(k_bins).astype("float128")
+    sub_count = np.zeros(k_bins).astype("f8")
+    sub_knorm_sum = np.zeros(k_bins).astype("f8")
 
     # Loop over the bins and sum the values in each bin
     for i in range(k_bins):

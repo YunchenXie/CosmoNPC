@@ -147,6 +147,8 @@ def get_legendre(ell, r_xhat, r_yhat, r_zhat):
     """
     import sympy as sp
     import numpy as np
+    import numexpr
+
 
     # Input validation
     ell = int(ell)
@@ -160,7 +162,6 @@ def get_legendre(ell, r_xhat, r_yhat, r_zhat):
     cos_theta = sp.Symbol('cos_theta', real=True)
 
     # Compute the cosine of the angle using the dot product
-    # cos(theta) = (r_xhat * k_xhat + r_yhat * k_yhat + r_zhat * k_zhat)
     expr = r_xhat * k_xhat + r_yhat * k_yhat + r_zhat * k_zhat
 
     # Compute the Legendre polynomial P_ell(cos_theta)
@@ -223,6 +224,14 @@ def CompensateCIC(w, v):
         v = v / tmp
     return v
 
+def CompensateNGP(w, v):
+    for i in range(3):
+        wi = w[i]
+        tmp = (np.sinc(0.5 * wi / np.pi)) 
+        tmp[wi == 0.] = 1.
+        v = v / tmp
+    return v
+
 def CompensateTSCShotnoise(w, v):
     for i in range(3):
         wi = w[i]
@@ -241,4 +250,7 @@ def CompensateCICShotnoise(w, v):
     for i in range(3):
         wi = w[i]
         v = v / (1 - 2. / 3 * np.sin(0.5 * wi) ** 2) ** 0.5
+    return v
+
+def CompensateNGPShotnoise(w, v):
     return v
