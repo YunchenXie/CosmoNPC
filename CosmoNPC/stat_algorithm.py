@@ -294,7 +294,6 @@ def calculate_power_spectrum_survey(stat_attrs, rfield_a, rfield_b, correlation_
 
 
 
-
 def calculate_power_spectrum_box(rfield_a, rfield_b, correlation_mode, \
                                  stat_attrs, comm, **kwargs):
     rank = comm.Get_rank()
@@ -373,7 +372,7 @@ def calculate_power_spectrum_box(rfield_a, rfield_b, correlation_mode, \
     del rfield_a, rfield_b, cfield_a, cfield_b
     gc.collect()
 
-
+    # create the results container
     results = {} if rank == 0 else None
 
     # get k_eff and k_num in one particular k_bin

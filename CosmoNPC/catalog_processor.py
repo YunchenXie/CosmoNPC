@@ -10,6 +10,7 @@ import gc
 import fitsio
 
 
+
 def npy_reader(data_path,comm):
     """
     Read npy files in parallel using MPI by automatically handle the file splitting.
@@ -64,8 +65,6 @@ def fits_reader(comm, files, column_names):
     dtype = [(col, 'f8') for col in column_names]
     result = np.array([], dtype=dtype)
     
-
-
     for f in [files] if isinstance(files, str) else files:
         print(f"Rank {rank} processing file: {f}")
         with fitsio.FITS(f) as fits:
@@ -260,6 +259,7 @@ def catalog_reader(catalog, geometry, column_names, z_range, comp_weight_plan, \
 
 
         elif data_ext == "fits":
+            raise NotImplementedError("Box-like geometry with .fits file is not yet implemented.")
             data_arr = fits_reader(comm, catalog, column_names)
 
             # Create a structured ndarray directly using the keys from data_arr
@@ -288,6 +288,7 @@ def catalog_reader(catalog, geometry, column_names, z_range, comp_weight_plan, \
         """
 
         if data_ext == "npy":
+            raise NotImplementedError("Survey-like geometry with .npy file is not yet implemented.")
             assert column_names is not None and len(column_names) >= 5, \
                 "For survey-like geometry with .npy file, column_names must be provided \
                     with at least 5 elements for x, y, z, w_fkp, w_comp."
@@ -344,8 +345,7 @@ def catalog_reader(catalog, geometry, column_names, z_range, comp_weight_plan, \
             # add completeness weight
             data_arr = add_completeness_weight(data_arr, comp_weight_plan, catalog_type, comm)
 
-
-
+            # convert (RA, DEC, Z) to (x, y, z)
             posi = ra_dec_z_to_xyz(data_arr, para_cosmo, comm)
 
             # Create a structured ndarray directly using the keys from data_arr
@@ -354,7 +354,6 @@ def catalog_reader(catalog, geometry, column_names, z_range, comp_weight_plan, \
                                                      ('WEIGHT_FKP', 'f8'), 
                                                      ('NZ', 'f8')])
             
-            # convert (RA, DEC, Z) to (x, y, z)
             data_cat['Position'] = posi
             data_cat['WEIGHT'] = data_arr['WEIGHT']
             if 'WEIGHT_FKP' in data_arr.dtype.names:
@@ -404,12 +403,6 @@ def catalog_reader(catalog, geometry, column_names, z_range, comp_weight_plan, \
 
 
 
-            
-            
-
-
-
-
 def ra_dec_z_to_xyz(data_arr, para_cosmo=None, comm=None):
     """
     Convert (RA, DEC, Z) to (x_1, x_2, x_3) using the specified cosmology.
@@ -444,7 +437,6 @@ def ra_dec_z_to_xyz(data_arr, para_cosmo=None, comm=None):
         my_cosmo = Planck18
         if rank == 0:
             logging.info(f"Using default Planck18 cosmology: {my_cosmo}")
-
 
     # Convert (RA, DEC, Z) to (x, y, z)
     ra = np.deg2rad(data_arr["RA"])  
