@@ -98,7 +98,6 @@ def pm_painter(Position, WEIGHT, Nmesh, boxsize, sampler,interlaced,comm, boxcen
 
     if boxcenter is not None:
         Position = Position - boxcenter  # to be checked later
-        logging.info(f"Shift positions by boxcenter {boxcenter} in Rank {rank}")
 
     # pmesh does not support the name "ngp", map it to "NEAREST"
     if sampler == "ngp":
@@ -211,12 +210,12 @@ def get_mesh_pk_survey(catalogs, correlation_mode, nmesh, geometry, column_names
 
     # Generate meshes for tracer_a
     if rank == 0:
-        logging.info(f"Start generating meshes for data catalog of tracer_a. {'*' * 60}")
+        logging.info(f"Start generating meshes for data catalog of tracer_a.")
     rfield_data_a = pm_painter(data_a['Position'], data_a['WEIGHT']*data_a["WEIGHT_FKP"],\
                            Nmesh, boxsize, sampler, interlaced, comm, boxcenter=boxcenter)
     
     if rank == 0:
-        logging.info(f"Start generating meshes for randoms catalog of tracer_a. {'*' * 60}")
+        logging.info(f"Start generating meshes for randoms catalog of tracer_a.")
     rfield_randoms_a = pm_painter(randoms_a['Position'], randoms_a['WEIGHT']*randoms_a["WEIGHT_FKP"],\
                            Nmesh, boxsize, sampler, interlaced, comm, boxcenter=boxcenter)
     
@@ -265,11 +264,11 @@ def get_mesh_pk_survey(catalogs, correlation_mode, nmesh, geometry, column_names
 
         # Generate meshes for tracer_b
         if rank == 0:
-            logging.info(f"Start generating meshes for data catalog of tracer_b. {'*' * 60}")
+            logging.info(f"Start generating meshes for data catalog of tracer_b.")
         rfield_data_b = pm_painter(data_b['Position'], data_b['WEIGHT']*data_b["WEIGHT_FKP"],\
                                Nmesh, boxsize, sampler, interlaced, comm, boxcenter=boxcenter)
         if rank == 0:
-            logging.info(f"Start generating meshes for randoms catalog of tracer_b. {'*' * 60}")
+            logging.info(f"Start generating meshes for randoms catalog of tracer_b.")
         rfield_randoms_b = pm_painter(randoms_b['Position'], randoms_b['WEIGHT']*randoms_b["WEIGHT_FKP"],\
                                Nmesh, boxsize, sampler, interlaced, comm, boxcenter=boxcenter)
         
@@ -279,8 +278,6 @@ def get_mesh_pk_survey(catalogs, correlation_mode, nmesh, geometry, column_names
 
         # FKP overdensity field
         rfield_b = rfield_data_b - alpha_b * rfield_randoms_b
-
-
 
     # calculate the normalization and shot noise
     if normalization_scheme == "particle":

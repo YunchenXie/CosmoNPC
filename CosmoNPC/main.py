@@ -82,6 +82,7 @@ def run_task(statistic,correlation_mode, geometry,catalogs,**kwargs):
         time_rfield = time.time()
         if rank == 0:
             logging.info(f"Time to create (FKP) overdensity field(s): {time_rfield - time_start:.2f} seconds")
+            logging.info(f"{'$' * 60} Start to compute power spectrum. {'$' * 60}")
         
         # Compute power spectrum
         if geometry == "survey-like":

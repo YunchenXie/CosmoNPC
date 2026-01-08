@@ -213,7 +213,7 @@ def catalog_reader(catalog, geometry, column_names, z_range, comp_weight_plan, \
     size = comm.Get_size()
 
     if rank == 0:
-        logging.info(f"{'*' * 60}\nStart to read catalog: {catalog}\n{'*' * 60}")
+        logging.info(f"{'*' * 80}\nStart to read catalog: {catalog}")
 
     supported_types = {"npy", "fits"}  # Supported file types for catalogs
     data_path = catalog # could be a single file or a list of files

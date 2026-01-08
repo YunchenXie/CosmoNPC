@@ -18,7 +18,7 @@ CONFIG = {
         "randoms_b": "/Users/xieyunchen/Downloads/BOSS_fits/random0_DR12v5_LOWZ_South.fits",
     },
 
-    # Column names
+    # Column names, VERY IMPORTANT
     # "column_names": ["x", "y", "z"],  # For box-like catalog; "w" is optional
     # Warning: for box-like catalog, the order of columns here must match that in the .npy files
 

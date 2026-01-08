@@ -3,8 +3,8 @@ import yaml
 import numpy as np
 from mpi4py import MPI
 from CosmoNPC import run_task
-from CosmoNPC.config_pk import CONFIG
-# from CosmoNPC.config_pk_survey import CONFIG
+# from CosmoNPC.config_pk import CONFIG
+from CosmoNPC.config_pk_survey import CONFIG
 
 
 # Initialize MPI
