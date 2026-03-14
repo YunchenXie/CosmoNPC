@@ -7,17 +7,6 @@ import gc
 Get the distance of every mesh grid to the mesh-center in k-space for radial binning
 as well as get the normalized position of every mesh grid in k/x-space for spherical harmonics
 """
-# def get_kgrid(cfield):
-#     kgrid = [np.real(kk) for kk in cfield.x]
-#     knorm = np.sqrt(sum(np.real(kk)**2 for kk in cfield.x))
-#     knorm[knorm == 0.] = np.inf
-#     normalized_kgrid = []
-#     for k in kgrid:
-#         normalized_kgrid.append(k / knorm)
-#     # reset knorm, honestly, it's stupid...
-#     # I have some new idea to avoid this but i'm lazy to validate it
-#     knorm[knorm == np.inf] = 0.
-#     return normalized_kgrid, knorm
 
 def get_kgrid(cfield):
     kgrid = [np.real(kk) for kk in cfield.x]
@@ -25,6 +14,7 @@ def get_kgrid(cfield):
     normalized_kgrid = []
     for k in kgrid:
         normalized_kgrid.append(k / knorm)
+    # we used the property of pmesh
     if knorm[0,0,0] == 0.:
         for k in normalized_kgrid:
             k[0,0,0] = 0.
@@ -42,7 +32,7 @@ def get_xgrid(rfield, boxcenter, boxsize, nmesh):
 
 
 def get_Ylm(l, m, Racah_normalized=False):
-    """
+    r"""
     Return a function that computes the complex spherical
     harmonic of order (l,m)
 
@@ -210,7 +200,7 @@ Taken from nbodykit.algorithms.convpower.catalogmesh
 see Jing et al 2005 <https://arxiv.org/abs/astro-ph/0409240> for details
 """
 def CompensateTSC(w, v):
-    """
+    r"""
     Return the Fourier-space kernel that accounts for the convolution of
     the gridded field with the TSC window function in configuration space.
     Parameters
@@ -330,17 +320,18 @@ def get_magnetic_configs_survey(ell_1, ell_2, L):
     three_j_values = []
     found_zero = False
 
-    for m1 in range(-ell_1, 1):
-        for m2 in range(-ell_2, ell_2 + 1):
-            m3 = -m1 - m2
-            if -L <= m3 <= L:
-                magnetic_configs.append((m1, m2, m3))
-                three_j_values.append(np.float64(wigner_3j(ell_1, ell_2, L, m1, m2, m3).evalf()))
-                if (m1, m2, m3) == (0, 0, 0):
+    for M in range(-L, L + 1):
+        for m1 in range(-ell_1, ell_1 + 1):
+            m2 = -M - m1
+            if -ell_2 <= m2 <= ell_2:
+                magnetic_configs.append((m1, m2, M))
+                three_j_values.append(np.float64(wigner_3j(ell_1, ell_2, L, m1, m2, M).evalf()))
+                if (m1, m2, M) == (0, 0, 0):
                     found_zero = True
                     break
         if found_zero:
             break
+
     return magnetic_configs, three_j_values
         
         
@@ -397,6 +388,14 @@ def get_associated_legendre_coefficients(ell, m , k1 ,k2 ,k_min,k_max,kbin, mode
     res_assoc_legendre *= (-1)**(ell + m) # the mu calculated here is actually -mu in the formula
     return res_assoc_legendre
 
+def get_valid_k3_bins(k1, k2, k_min, k_max, kbin):
+    k3_min, k3_max = 2 * k_min, 2 * k_max
+    k3_edge = np.linspace(k3_min, k3_max, kbin *2 + 1)[:-1]
+    k3_center = 0.5 * (k3_edge[1:] + k3_edge[:-1])
+
+    valid_bins = np.logical_and(k3_center >= abs(k1 - k2), k3_center <= (k1 + k2))
+    return valid_bins
+
 
 
 def get_kbin_count(k_bins, k_edge, knorm):
@@ -435,3 +434,32 @@ def radial_binning(kfield, k_bins, k_edge, knorm):
     gc.collect()
 
     return sub_sum
+
+
+def get_q_ells(i, j, k_center, k_min, k_max, k_bins, ell_1, ell_2, L, k3_bins):
+    from sympy.physics.wigner import wigner_3j
+    r"""
+    $$
+    q_{\ell_1 \ell_2 L}\left(k_1, k_2, k_3\right)=
+    \sum_n(-1)^n \mathcal{L}_{\ell_1}^n\left(\hat{k}_1 \cdot \hat{k}_3\right) 
+    \mathcal{L}_{\ell_2}^{-n}\left(\hat{k}_2 \cdot \hat{k}_3\right)
+    \left(\begin{array}{ccc}
+    \ell_1 & \ell_2 & L \\
+    n & -n & 0
+    \end{array}\right)
+    $$
+    """
+
+    q_ells = np.zeros(k3_bins).astype('f8')
+    ell_min = min(ell_1, ell_2)
+    
+    for xx in range(-ell_min, ell_min + 1):
+        three_j = np.float64(wigner_3j(ell_1, ell_2, L, xx, -xx, 0).evalf())
+        al_13 = get_associated_legendre_coefficients(ell_1, xx, \
+                            k_center[i], k_center[j], k_min, k_max, k_bins, mode='13')
+        al_23 = get_associated_legendre_coefficients(ell_2, -xx, \
+                            k_center[i], k_center[j], k_min, k_max, k_bins, mode='23')
+        sub_coeff = (-1)**(xx) * three_j * al_13 * al_23
+        q_ells += sub_coeff
+        
+    return q_ells

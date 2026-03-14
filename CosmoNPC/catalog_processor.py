@@ -452,7 +452,8 @@ def catalog_reader(catalog, geometry, column_names, z_range, comp_weight_plan, \
             data_cat = np.zeros(len(data_arr), dtype=[('Position', 'f8', (3,)), 
                                                      ('WEIGHT', 'f8'), 
                                                      ('WEIGHT_FKP', 'f8'), 
-                                                     ('NZ', 'f8')])
+                                                     ('NZ', 'f8'),
+                                                     ])
             
             data_cat['Position'] = posi
             data_cat['WEIGHT'] = data_arr['WEIGHT']
@@ -460,6 +461,7 @@ def catalog_reader(catalog, geometry, column_names, z_range, comp_weight_plan, \
                 data_cat['WEIGHT_FKP'] = data_arr['WEIGHT_FKP']
             else:
                 raise ValueError("WEIGHT_FKP column is missing in the catalog.")
+
             
             # NZ is necessary for particle normalization
             # for desi like catalog, NZ could be NX
@@ -596,5 +598,3 @@ def add_rsd(comm, posi_arr, vel_arr, h, om0, redshift_box=None,LOS=None, geometr
             logging.info("Boundary conditions applied for box-like catalogue")
             
     return posi_arr
-
-
