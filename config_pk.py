@@ -52,8 +52,7 @@ CONFIG = {
     "compensation": True,
     # normalization_scheme: Pk normalization, particle or mixed-mesh
     "normalization_scheme": "particle",
-    # "fast_estimation_mode": "closed", # "off", "replace", "coexist", default "closed"
-    # "fast_estimation_mode": "closed",
+
 
     # Para_cosmo (for .npy/box-like catalogs, cosmology parameters not used)
     "cosmology": {
@@ -63,12 +62,12 @@ CONFIG = {
     },
 
     # Redshift range
-    "z_range": [0.15, 0.43], # redshift range for survey-like catalog
+    # "z_range": [0.15, 0.43], # redshift range for survey-like catalog
     "redshift_box": 0.95,  # redshift for RSD calculation in box-like catalog
 
     # Comp_weight_plan
     # scheme: "boss", "eboss" or "desi"
-    "scheme": "boss",
+    # "scheme": "boss",
     # name_alias: Weight column alias
     # "name_alias": "sssssss",
 

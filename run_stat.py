@@ -3,10 +3,10 @@ import yaml
 import numpy as np
 from mpi4py import MPI
 from CosmoNPC import run_task
-from config_bk_sugi_survey import CONFIG
-# from config_bk_sugi_full_test import CONFIG
-# from config_bk_sugi_cross import CONFIG
-# from config_pk import CONFIG
+# from config_bk_sugi_survey import CONFIG
+# from config_bk_sugi import CONFIG
+
+from config_pk import CONFIG
 # from config_pk_survey import CONFIG
 
 # Initialize MPI

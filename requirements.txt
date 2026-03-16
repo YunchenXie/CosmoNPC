@@ -1,0 +1,8 @@
+numpy
+mpi4py
+h5py
+astropy
+fitsio
+pmesh
+sympy
+numexpr

@@ -1,6 +1,5 @@
 import numpy as np
 import sympy as sp
-import numexpr
 import gc
 
 """
@@ -155,7 +154,6 @@ def get_legendre(ell, r_xhat, r_yhat, r_zhat):
     ----------
     https://en.wikipedia.org/wiki/Legendre_polynomials
     """
-
 
 
     # Input validation

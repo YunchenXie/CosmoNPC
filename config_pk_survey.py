@@ -25,7 +25,7 @@ CONFIG = {
     "column_names": ["RA", "DEC", "Z", "WEIGHT_FKP", "WEIGHT_SYSTOT", "WEIGHT_NOZ","WEIGHT_CP","NZ"], # For survey-like catalog
 
     # RSD
-    "rsd": [0, 0, 1],  # Unit 3-vector for redshift space distortion (RSD), box-like only
+    # "rsd": [0, 0, 1],  # Unit 3-vector for redshift space distortion (RSD), box-like only
 
     # Mesh
     # nmesh: Grid points (nx, ny, nz)

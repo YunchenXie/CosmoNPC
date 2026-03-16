@@ -32,8 +32,8 @@ CONFIG = {
     # "column_names": ["x", "y", "z", "w_comp", "w_fkp", "nz"], # For survey-like catalog
 
     # RSD, only for box-like catalog
-    "rsd": [0, 0, 1],  # Unit 3-vector for redshift space distortion (RSD), box-like only
-    "apply_rsd": True,  # Whether to apply RSD, box-like only
+    # "rsd": [0, 0, 1],  # Unit 3-vector for redshift space distortion (RSD), box-like only
+    # "apply_rsd": True,  # Whether to apply RSD, box-like only
 
     # Mesh
     # nmesh: Grid points (nx, ny, nz)
@@ -53,18 +53,19 @@ CONFIG = {
     # k_max: Max k (h/Mpc)
     "k_max": 0.2,
     # k_bins: k-space bins
-    "k_bins": 20,
+    "k_bins": 10,
     # poles: Multipole orders
-    "angu_config": [2, 2, 0], # for bk_sugi, this parameter indicates one single angular momenta configuration l_1,l_2,L
+    "angu_config": [2, 0, 2], # for bk_sugi, this parameter indicates one single angular momenta configuration l_1,l_2,L
     # compensation: Mesh compensation
     "compensation": True,
 
-    "data_vector_mode": "full", #"diagonal" or "full"
+    "data_vector_mode": "diagonal", #"diagonal" or "full"
     "block_size": "full", # 1,"full" or an integer between 1 and k_bins 
                         # (only for bk_sugi with data_vector_mode="full")
 
     # normalization_scheme: bk normalization, particle, mesh or mixed-mesh
     "normalization_scheme": "mesh", # only work for survey-like measurement
+
     # alpha_scheme: how to compute alpha (pypower or nbodykit)
     "alpha_scheme": "nbodykit",
 
@@ -77,7 +78,7 @@ CONFIG = {
 
     
     "z_range": [0.15, 0.43], # Redshift range, only for survey-like catalog
-    "redshift_box": 0.95,  # redshift for RSD calculation in box-like catalog
+    # "redshift_box": 0.95,  # redshift for RSD calculation in box-like catalog
 
     # Comp_weight_plan
     # scheme: None, "boss", "eboss" or "desi", this is important for correctly reading the necessary columns

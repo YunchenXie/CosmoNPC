@@ -64,7 +64,7 @@ CONFIG = {
                         # (only for bk_sugi with data_vector_mode="full")
 
     # normalization_scheme: Pk normalization, particle or mixed-mesh
-    "normalization_scheme": "particle", # only work for survey-like measurement
+    "normalization_scheme": "particle", 
 
     # Para_cosmo (for .npy/box-like catalogs, it can be used to apply RSD)
     "cosmology": { #Planck18 parameters with TT,TE,EE+lowE+lensing
@@ -74,12 +74,12 @@ CONFIG = {
     },
 
     
-    "z_range": [0.15, 0.43], # Redshift range, only for survey-like catalog
+    # "z_range": [0.15, 0.43], # Redshift range, only for survey-like catalog
     "redshift_box": 0.95,  # redshift for RSD calculation in box-like catalog
 
     # Comp_weight_plan, only for survey-like catalog
     # scheme: "boss", "eboss" or "desi"
-    "scheme": "boss",
+    # "scheme": "boss",
     # name_alias: Weight column alias
     # "name_alias": "sssssss",
 
