@@ -869,10 +869,10 @@ def calculate_bk_sugi_box(rfield_a, rfield_b, rfield_c, correlation_mode, \
         results.update({
             'B_sugi': final_bk,
             'SN_terms': {
-                'SN0': SN0,
-                'SN1': SN1,
-                'SN2': SN2,
-                'SN3': SN3
+                'SN0': SN0/I_norm,
+                'SN1': SN1/I_norm,
+                'SN2': SN2/I_norm,
+                'SN3': SN3/I_norm
             },
             'I_norm': I_norm,
             "Shot_noise": total_shot_noise,
@@ -1758,7 +1758,7 @@ def calculate_bk_sugi_survey(rfield_a, rfield_b, rfield_c, correlation_mode, \
         results.update({
             "B_sugi": final_bk,
             "Bk_raw": total_res,
-            "SN_terms": {"SN0": SN0, "SN1": SN1, "SN2": SN2, "SN3": SN3},
+            "SN_terms": {"SN0": SN0/I_norm, "SN1": SN1/I_norm, "SN2": SN2/I_norm, "SN3": SN3/I_norm},
             "Shot_noise": total_shot_noise,
             "I_norm": I_norm,
             "k_eff": k_eff,

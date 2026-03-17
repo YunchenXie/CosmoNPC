@@ -18,6 +18,11 @@ Catalog: [galaxy_DR12v5_LOWZ_South.fits and random0_DR12v5_LOWZ_South.fits](http
 
 ## Bispectrum (with Triumvirate)
 
+Note: the differences in bispectrum mainly come from two sources:
+
+1. The spherical harmonics of the line of sight are applied to catalogs in Triumvirate, but to mesh fields in CosmoNPC.
+2. The two codes use different thin-shell approximations for $\left.S_{\ell_1 \ell_2 L}\right|_{i=j \neq k}\left(k_1, k_2\right)$.
+
 ### Box-like
 
 Catalog: [abacus_HF_ELG_0p950_DR2_v2.0_AbacusSummit_base_c000_ph000_base_conf_nfwexp_clustering.dat.h5](https://abacussummit.readthedocs.io/en/latest/data-products.html)
@@ -28,10 +33,7 @@ Catalog: [abacus_HF_ELG_0p950_DR2_v2.0_AbacusSummit_base_c000_ph000_base_conf_nf
 
 Catalog: [galaxy_DR12v5_LOWZ_South.fits and random0_DR12v5_LOWZ_South.fits](https://data.sdss.org/sas/dr12/boss/lss/)
 
-Note: the differences mainly come from two sources:
 
-1. The spherical harmonics of the line of sight are applied to catalogs in Triumvirate, but to mesh fields in CosmoNPC.
-2. The two codes use different thin-shell approximations for $\left.S_{\ell_1 \ell_2 L}\right|_{i=j \neq k}\left(k_1, k_2\right)$.
 
 ![bk_survey_signal](./bk_survey_signal.png)
 
