@@ -317,8 +317,3 @@ def run_stats(config):
         os.makedirs(config['output_dir'], exist_ok=True)
         
     run_task(**config)
-
-
-
-if __name__ == '__main__':
-    run_stats()

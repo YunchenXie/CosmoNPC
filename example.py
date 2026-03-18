@@ -1,6 +1,6 @@
 from copy import deepcopy
 from cosmonpc import run_stats
-from cosmonpc.config import pk_box, bk_sugi_box
+from cosmonpc.config import pk_box, bk_sugi_box, pk_survey, bk_sugi_survey
 
 if __name__ == "__main__":
     # config = deepcopy(pk_box.CONFIG)
