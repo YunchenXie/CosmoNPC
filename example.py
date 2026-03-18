@@ -3,7 +3,9 @@ from cosmonpc import run_stats
 from cosmonpc.config import pk_box, bk_sugi_box, pk_survey, bk_sugi_survey
 
 if __name__ == "__main__":
-    config = deepcopy(pk_box.CONFIG)
+    # config = deepcopy(pk_box.CONFIG)
+    config = deepcopy(pk_survey.CONFIG)
+    # config = deepcopy(bk_sugi_survey.CONFIG)
     # config = deepcopy(bk_sugi_box.CONFIG)
     # config["tracer_type"] = "abb"
     # config["catalogs"] = {

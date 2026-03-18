@@ -1,3 +1,5 @@
+![cnpc](./resources/cnpc.jpg)
+
 # CosmoNPC
 
 CosmoNPC is a Python/MPI code for mesh-based measurements of large-scale structure statistics, **based on a suite of optimized multipole expansion algorithms**, with an emphasis on power spectrum multipoles and bispectrum multipoles in both box-like and survey-like geometries.
