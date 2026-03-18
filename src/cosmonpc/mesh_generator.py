@@ -3,7 +3,7 @@ from pmesh import ParticleMesh
 from numpy.lib import format
 from mpi4py import MPI
 import logging
-from .math_funcs import *
+from .math_evaluator import *
 from .catalog_processor import *
 import warnings
 import gc

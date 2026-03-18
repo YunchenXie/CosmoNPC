@@ -39,11 +39,11 @@ Cross statistics are part of the core code structure for both `pk` and `bk`, rat
 
 Main package modules:
 
-- `run.py`
+- `task_executor.py`
 - `catalog_processor.py`
 - `mesh_generator.py`
-- `math_funcs.py`
-- `stat_algorithm.py`
+- `math_evaluator.py`
+- `stat_estimator.py`
 
 Representative configuration files:
 
