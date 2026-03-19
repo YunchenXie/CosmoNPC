@@ -2,12 +2,13 @@
 
 # CosmoNPC
 
-CosmoNPC is a Python/MPI code for mesh-based measurements of large-scale structure statistics, **based on a suite of optimized multipole expansion algorithms**, with an emphasis on power spectrum multipoles and bispectrum multipoles in both box-like and survey-like geometries.
+CosmoNPC(**Cosmo**logical **N**-**P**oint correlation **C**alculator) is a Python/MPI code for mesh-based measurements of large-scale structure statistics, **based on a suite of optimized multipole expansion algorithms**, with an emphasis on power spectrum multipoles and bispectrum multipoles in both box-like and survey-like geometries. 
 
 The present implementation is aimed at:
 
 - power spectrum measurements (`pk`)
 - Sugiyama-style bispectrum multipoles (`bk_sugi`)
+- Scoccimarro-style bispectrum multipoles (`bk_sco`), to be implemented.
 - auto-correlations and cross-correlations
 - simulation boxes and survey catalogs
 - MPI-distributed FFT-based estimators

@@ -16,6 +16,7 @@ dependencies = [
     "numpy>=1.26.4",
     "pmesh>=0.1.59",
     "sympy>=1.14.0",
+    "scipy>=1.8.0",
 ]
 
 [build-system]
