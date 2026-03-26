@@ -71,6 +71,7 @@ The Python dependencies currently required by the code are listed in `pyproject.
 - `pmesh`
 - `sympy`
 - `numexpr`
+- `scipy`
 
 Notes:
 
@@ -172,7 +173,7 @@ In full bispectrum mode, the output is a two-dimensional data vector `B(k_1, k_2
 
 - `block_size = N`
   - where `N` is an integer between `1` and `k_bins`
-  - split the full data vector into `N x N` square blocks
+  - split the full data vector into several  square blocks with size of `N x N`.
   - this is the practical compromise between speed and memory
 
 Within one block, CosmoNPC can reuse precomputed binned fields instead of reconstructing them for every individual `(k_1, k_2)` pair. This is why a larger `block_size` can be faster. The trade-off is that more intermediate mesh fields remain in memory at the same time.
@@ -182,13 +183,9 @@ In practical terms:
 - larger `block_size` means more reuse and higher memory usage
 - smaller `block_size` means less reuse and lower memory usage
 
-This parameter has no practical effect for `data_vector_mode="diagonal"`, because the diagonal mode does not evaluate the full `(k_1, k_2)` rectangle.
+This parameter has no practical effect for `data_vector_mode="diagonal"`.
 
-A reasonable usage strategy is:
 
-- use `block_size = "full"` only when memory is clearly sufficient
-- use a moderate integer value when running large meshes in `full` mode
-- reduce `block_size` if the job becomes memory-limited
 
 ## Input Catalogs
 
