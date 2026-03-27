@@ -11,14 +11,21 @@ def calculate_bk_sco_box(rfield, stat_attrs, comm, **kwargs):
     rank = comm.Get_rank()
 
     # Extract mesh attributes
-    poles = stat_attrs['poles']
-    boxsize, nmesh = np.array(stat_attrs['boxsize']), np.array(stat_attrs['nmesh'])
+    poles = stat_attrs["poles"]
+    boxsize, nmesh = np.array(stat_attrs["boxsize"]), np.array(stat_attrs["nmesh"])
     # boxcenter = np.array(stat_attrs['boxcenter'])
-    k_min, k_max, k_bins = stat_attrs['k_min'], stat_attrs['k_max'], stat_attrs['k_bins']
-    sampler, interlaced = stat_attrs['sampler'], stat_attrs['interlaced']
-    P_shot = stat_attrs['P_shot']
-    NZ = stat_attrs['NZ']
-    rsd = np.array(stat_attrs['rsd'])
+    k_min, k_max, k_bins = (
+        stat_attrs["k_min"],
+        stat_attrs["k_max"],
+        stat_attrs["k_bins"],
+    )
+    sampler, interlaced = stat_attrs["sampler"], stat_attrs["interlaced"]
+    P_shot = stat_attrs["P_shot"]
+    NZ = stat_attrs["NZ"]
+    rsd = np.array(stat_attrs["rsd"])
+
+    # Validate the poles
+    validate_poles(poles)
 
     if rank == 0:
         logging.info(f"Rank {rank}: Using rsd = {rsd}.")
@@ -40,27 +47,23 @@ def calculate_bk_sco_box(rfield, stat_attrs, comm, **kwargs):
     if rank == 0:
         logging.info(f"{compensation[0][1].__name__} applied to the density field")
 
-    # Validate the poles
-    validate_poles(poles)
-
     # Get the kgrid, knorm for binning and Legendre polynomials
     if poles == [0]:  # For ell = 0 only, we do not need to calculate the kgrid
-        knorm = np.sqrt(sum(np.real(kk)**2 for kk in cfield.x))
+        knorm = np.sqrt(sum(np.real(kk) ** 2 for kk in cfield.x))
         kgrid = None
     else:
         kgrid, knorm = get_kgrid(cfield)
 
     # clear zero-mode in the Fourier space
-    cfield[knorm == 0.] = 0.
+    cfield[knorm == 0.0] = 0.0
     if rank == 0:
         logging.info(f"Rank {rank}: Zero-mode in Fourier space cleared")
-
 
     """ 
         Before getting the bispectrum, we firstly get the power spectrum monopole
         as well as k_eff, k_num for the bk shot noise
     """
-    P_field = np.real(cfield[:])**2 + np.imag(cfield[:])**2
+    P_field = np.real(cfield[:]) ** 2 + np.imag(cfield[:]) ** 2
 
     results = {} if rank == 0 else None
 
@@ -69,6 +72,7 @@ def calculate_bk_sco_box(rfield, stat_attrs, comm, **kwargs):
     """
     binned_F0x_list = get_binned_ifft_field(cfield, k_bins, k_edge, knorm, 0, comm)
 
+    F_2, F_4 = None, None
 
     # Loop over the poles
     for pole in poles:
@@ -79,7 +83,9 @@ def calculate_bk_sco_box(rfield, stat_attrs, comm, **kwargs):
             # for ell = odd, the multipoles are 0 strictly
             res = np.zeros(k_bins).astype("float128")
             if rank == 0:
-                logging.info(f"Rank {rank}: ell = {pole}, Odd multipoles are automatically set to zero")
+                logging.info(
+                    f"Rank {rank}: ell = {pole}, Odd multipoles are automatically set to zero"
+                )
         else:
             if pole == 0:
                 binned_list_k1 = binned_F0x_list
@@ -89,14 +95,16 @@ def calculate_bk_sco_box(rfield, stat_attrs, comm, **kwargs):
                 if rank == 0:
                     logging.info(f"Rank {rank}: L_ells = {L_ells.expr}")
                 F_ell = cfield * L_ells(kgrid[0], kgrid[1], kgrid[2])
-                binned_list_k1 = get_binned_ifft_field(F_ell, k_bins, k_edge, knorm, pole, comm)
+                binned_list_k1 = get_binned_ifft_field(
+                    F_ell, k_bins, k_edge, knorm, pole, comm
+                )
             binned_list_k2 = binned_F0x_list
             binned_list_k3 = binned_F0x_list
 
-    # loop over all possible combinations of binned_list_k1, k2, k3
-    # with k1 >= k2 >= k3
+        # loop over all possible combinations of binned_list_k1, k2, k3
+        # with k1 >= k2 >= k3
 
-        sub_res,tri_config, N_tri= [], [] ,[]
+        sub_res, tri_config, N_tri = [], [], []
 
         for i in range(k_bins):
             for j in range(i, k_bins):
@@ -104,28 +112,43 @@ def calculate_bk_sco_box(rfield, stat_attrs, comm, **kwargs):
                     # if rank == 0:
                     #     logging.info(f"Rank {rank}: Processing bins with index: {i}, {j}, {k}")
                     # get the bispectrum
-                    if i + j >= k-1:
-                        sub_res.append(np.sum(binned_list_k1[i] * binned_list_k2[j] * binned_list_k3[k]))
+                    if i + j >= k - 1:
+                        sub_res.append(
+                            np.sum(
+                                binned_list_k1[i]
+                                * binned_list_k2[j]
+                                * binned_list_k3[k]
+                            )
+                        )
                         tri_config.append((i, j, k))
                         # $ V_T^{ANA} = 8\pi^2k_1k_2k_3\Delta k^3 $
-                        N_tri.append(8 * np.pi**2 *k_center[i] * k_center[j] * k_center[k] * dk **3)
+                        N_tri.append(
+                            8
+                            * np.pi**2
+                            * k_center[i]
+                            * k_center[j]
+                            * k_center[k]
+                            * dk**3
+                        )
 
         sub_res = np.array(sub_res).astype("float128")
-        
+
         # Gather the results from all ranks
         bk_res = comm.reduce(sub_res, op=MPI.SUM, root=0)
 
         # get NT, the number of triangles
         if rank == 0:
             N_tri = np.array(N_tri)
-            bk_res *= (2* pole + 1) / N_tri
+            bk_res *= (2 * pole + 1) / N_tri
             vol_per_cell = boxsize.prod() / nmesh.prod()
-            bk_res *= vol_per_cell**3 / boxsize.prod() # we need further check this
-            
+            bk_res *= vol_per_cell**3 / boxsize.prod()  # we need further check this
+
             # store the results
-            results.update({
-                f'B{pole}': bk_res,
-            })
+            results.update(
+                {
+                    f"B{pole}": bk_res,
+                }
+            )
             logging.info(f"Rank {rank}: B{pole} calculated")
             if "N_tri" not in results:
                 results["N_tri"] = N_tri
@@ -142,9 +165,8 @@ def calculate_bk_sco_box(rfield, stat_attrs, comm, **kwargs):
         return results
     else:
         return None
-        
 
-            
+
 def get_binned_ifft_field(kfield, k_bins, k_edge, knorm, pole, comm):
     """
     Get the binned inverse Fourier transform of the density field
@@ -159,39 +181,56 @@ def get_binned_ifft_field(kfield, k_bins, k_edge, knorm, pole, comm):
     list_to_return = []
     # Loop over the bins and sum the values in each bin
     for i in range(k_bins):
-        mask = np.logical_and(knorm >= k_edge[i], knorm < k_edge[i+1])
+        mask = np.logical_and(knorm >= k_edge[i], knorm < k_edge[i + 1])
         if pole == 0:
-            list_to_return.append(np.real((kfield * mask).c2r())) # it is strictly to be real
+            list_to_return.append(
+                np.real((kfield * mask).c2r())
+            )  # it is strictly to be real
         else:
-            list_to_return.append(2 * np.real((kfield * mask).c2r())) # for G_ell, we take the real part and double it
+            list_to_return.append(
+                2 * np.real((kfield * mask).c2r())
+            )  # for G_ell, we take the real part and double it
     del mask
     gc.collect()
 
     if rank == 0:
-        logging.info(f"Rank {rank}: Mesh shape of binned ifft field = {list_to_return[0].shape}")
+        logging.info(
+            f"Rank {rank}: Mesh shape of binned ifft field = {list_to_return[0].shape}"
+        )
 
     return list_to_return
 
 
-def calculate_power_spectrum_survey(stat_attrs, rfield_a, rfield_b, correlation_mode, comm, **kwargs):
+def calculate_power_spectrum_survey(
+    stat_attrs, rfield_a, rfield_b, correlation_mode, comm, **kwargs
+):
     rank = comm.Get_rank()
 
     # Extract mesh attributes
-    poles = stat_attrs['poles']
-    boxsize, nmesh = np.array(stat_attrs['boxsize']), np.array(stat_attrs['nmesh'])
-    boxcenter = np.array(stat_attrs['boxcenter'])
-    k_min, k_max, k_bins = stat_attrs['k_min'], stat_attrs['k_max'], stat_attrs['k_bins']
-    sampler, interlaced = stat_attrs['sampler'], stat_attrs['interlaced']
-    N0 = stat_attrs['N0']
+    poles = stat_attrs["poles"]
+    use_fast_mode = stat_attrs.get("use_fast_mode", False)
+    boxsize, nmesh = np.array(stat_attrs["boxsize"]), np.array(stat_attrs["nmesh"])
+    boxcenter = np.array(stat_attrs["boxcenter"])
+    k_min, k_max, k_bins = (
+        stat_attrs["k_min"],
+        stat_attrs["k_max"],
+        stat_attrs["k_bins"],
+    )
+    sampler, interlaced = stat_attrs["sampler"], stat_attrs["interlaced"]
+    N0 = stat_attrs["N0"]
 
     if stat_attrs["normalization_scheme"] == "particle":
-        I_norm = stat_attrs['I_rand']
+        I_norm = stat_attrs["I_rand"]
         if rank == 0:
-            logging.info(f"Rank {rank}: Using particle normalization with I_rand = {I_norm}.")
+            logging.info(
+                f"Rank {rank}: Using particle normalization with I_rand = {I_norm}."
+            )
     else:
-        I_norm = stat_attrs['I_mesh']
+        I_norm = stat_attrs["I_mesh"]
         if rank == 0:
-            logging.info(f"Rank {rank}: Using mixed-mesh normalization with I_mesh = {I_norm}.")
+            logging.info(
+                f"Rank {rank}: Using mixed-mesh normalization with I_mesh = {I_norm}."
+            )
 
     # Define some useful variables
     k_edge = np.linspace(k_min, k_max, k_bins + 1)
@@ -200,31 +239,69 @@ def calculate_power_spectrum_survey(stat_attrs, rfield_a, rfield_b, correlation_
 
     comm.Barrier()
 
+    def get_activate_fast_mode(poles, use_fast_mode):
+        supported_poles = ([0, 2, 4], [0, 2, 4, 6], [0, 2, 4, 6, 8])
+
+        if not use_fast_mode:
+            if rank == 0:
+                logging.info(f"Rank {rank}: [fast mode] disabled by configuration.")
+            return False
+
+        if correlation_mode != "auto":
+            if rank == 0:
+                logging.info(
+                    f"Rank {rank}: [fast mode] disabled because only auto-correlation is supported."
+                )
+            return False
+
+        if poles not in supported_poles:
+            if rank == 0:
+                logging.info(
+                    f"Rank {rank}: [fast mode] disabled because poles {poles} are unsupported. "
+                    f"Supported pole sets: {list(supported_poles)}."
+                )
+            return False
+
+        if rank == 0:
+            logging.info(f"Rank {rank}: [fast mode] activated for poles {poles}.")
+        return True
+
+    Flag_activate_fast_mode = get_activate_fast_mode(poles, use_fast_mode)
+
     # Calculate the Fourier transform of the density fields
     cfield_a = rfield_a.r2c()
 
     # Compensate the cfield depending on the type of mesh
     compensation = get_compensation(interlaced, sampler)
     cfield_a.apply(out=Ellipsis, func=compensation[0][1], kind=compensation[0][2])
-    cfield_a[:] *= boxsize.prod()  # normalize the cfield, very interesting, if the normalization is not done here, the result will be wrong,
+    cfield_a[
+        :
+    ] *= (
+        boxsize.prod()
+    )  # normalize the cfield, very interesting, if the normalization is not done here, the result will be wrong,
     if rank == 0:
-        logging.info(f"Rank {rank}: {compensation[0][1].__name__} applied to the density field a")
+        logging.info(
+            f"Rank {rank}: {compensation[0][1].__name__} applied to the density field a"
+        )
 
     if correlation_mode == "auto":
         cfield_b = cfield_a
         if rank == 0:
-            logging.info(f"Rank {rank}: Auto-correlation mode, using the same density field for b")
+            logging.info(
+                f"Rank {rank}: Auto-correlation mode, using the same density field for b"
+            )
     else:
         cfield_b = rfield_b.r2c()
         cfield_b.apply(out=Ellipsis, func=compensation[0][1], kind=compensation[0][2])
         cfield_b[:] *= boxsize.prod()
         if rank == 0:
-            logging.info(f"Rank {rank}: {compensation[0][1].__name__} applied to the density field b")
-
+            logging.info(
+                f"Rank {rank}: {compensation[0][1].__name__} applied to the density field b"
+            )
 
     # Get the kgrid, knorm, and x_grid for binning and spherical harmonics
     if poles == [0]:  # For ell = 0 only, we do not need to calculate the kgrid
-        knorm = np.sqrt(sum(np.real(kk)**2 for kk in cfield_a.x))
+        knorm = np.sqrt(sum(np.real(kk) ** 2 for kk in cfield_a.x))
         kgrid = None
     else:
         kgrid, knorm = get_kgrid(cfield_a)
@@ -240,16 +317,38 @@ def calculate_power_spectrum_survey(stat_attrs, rfield_a, rfield_b, correlation_
     total_knorm_sum = comm.reduce(sub_knorm_sum, op=MPI.SUM, root=0)
     if rank == 0:
         k_eff = total_knorm_sum / k_num
-    results = {'k_eff': k_eff, "k_num":k_num} if rank == 0 else None
+    results = {"k_eff": k_eff, "k_num": k_num, "I_norm": I_norm} if rank == 0 else None
+
+    skipped_poles_fast_mode = set()
+    if Flag_activate_fast_mode:
+        skip_map = {
+            (0, 2, 4): {4},
+            (0, 2, 4, 6): {6},
+            (0, 2, 4, 6, 8): {6, 8},
+        }
+        skipped_poles_fast_mode = skip_map.get(tuple(poles), set())
+        if rank == 0 and skipped_poles_fast_mode:
+            logging.info(
+                f"Rank {rank}: [fast mode] will skip poles {sorted(skipped_poles_fast_mode)} and complete them later."
+            )
+
+    F2_cache, F4_cache = None, None
 
     # Loop over the poles
     for pole in poles:
         if rank == 0:
             logging.info(f"Rank {rank}: Processing pole {pole}")
 
+        if pole in skipped_poles_fast_mode:
+            if rank == 0:
+                logging.info(
+                    f"Rank {rank}: [fast mode] skipping P{pole}; an approximated version will be calculated later."
+                )
+            continue
+
         if pole == 0:
             if correlation_mode == "auto":
-                P_ell_field = np.real(cfield_a[:])**2 + np.imag(cfield_a[:])**2
+                P_ell_field = np.real(cfield_a[:]) ** 2 + np.imag(cfield_a[:]) ** 2
             else:
                 P_ell_field = cfield_a[:] * np.conj(cfield_b[:])
         else:
@@ -257,8 +356,23 @@ def calculate_power_spectrum_survey(stat_attrs, rfield_a, rfield_b, correlation_
             IMPORTANT NOTE:
             Here we temporarily put the rsd effect into rfield_b
             """
-            G_ell_b = get_G_ell(rfield_b, pole, kgrid, xgrid, compensation, boxsize, comm)
+            G_ell_b = get_G_ell(
+                rfield_b, pole, kgrid, xgrid, compensation, boxsize, comm
+            )
             P_ell_field = cfield_a[:] * np.conj(G_ell_b[:])
+
+            if pole == 2 and Flag_activate_fast_mode:
+                F2_cache = G_ell_b + np.conj(
+                    space_inversion_transposed_complex(G_ell_b, return_type="ndarray")
+                )
+                if rank == 0:
+                    logging.info(f"Rank {rank}: [fast mode] cached F2.")
+            if pole == 4 and Flag_activate_fast_mode:
+                F4_cache = G_ell_b + np.conj(
+                    space_inversion_transposed_complex(G_ell_b, return_type="ndarray")
+                )
+                if rank == 0:
+                    logging.info(f"Rank {rank}: [fast mode] cached F4.")
 
         # Radial binning
         sub_sum = radial_binning(P_ell_field, k_bins, k_edge, knorm)
@@ -269,26 +383,89 @@ def calculate_power_spectrum_survey(stat_attrs, rfield_a, rfield_b, correlation_
         if rank == 0:
             res = total_sum / k_num
             # Add some factors, substract the shot noise and take the complex conjugate for ell > 0
-            res *= (2*pole+1)/ I_norm 
-            
+            res *= (2 * pole + 1) / I_norm
+
             if pole == 0:
                 res -= N0
                 logging.info(f"Rank {rank}: Shot noise subtracted from P0")
             else:
-                if pole & 1: # ell = odd
+                if pole & 1:  # ell = odd
                     res = 2j * np.imag(res)
                 else:
                     res = 2 * np.real(res)
 
             # Store the results
-            results.update({
-                f'P{pole}': res,
-            })
+            results.update(
+                {
+                    f"P{pole}": res,
+                }
+            )
             logging.info(f"Rank {rank}: P{pole} calculated")
 
     # Free memory
     del cfield_a, cfield_b, P_ell_field
     gc.collect()
+
+    if Flag_activate_fast_mode:
+        if rank == 0:
+            logging.info(f"Rank {rank}: [fast mode] completing skipped poles.")
+
+        # Complete P4b from the cached F2 field.
+        if poles == [0, 2, 4]:
+            P_22_field = F2_cache[:] * np.conj(F2_cache[:])
+            sub_sum_22 = radial_binning(P_22_field, k_bins, k_edge, knorm)
+            total_sum_22 = comm.reduce(sub_sum_22, op=MPI.SUM, root=0)
+
+            if rank == 0:
+                P22 = total_sum_22 / k_num
+                P22 *= 9 / I_norm
+                P22 -= N0 * 9 / 5
+                results["P4b"] = np.real(35 / 18 * P22 - results["P2"] - 7 / 2 * results["P0"])
+                logging.info(f"Rank {rank}: [fast mode] stored fast estimator P4b.")
+
+            del P_22_field, sub_sum_22, total_sum_22
+
+        # Complete P6b / P8b from the cached F2 and F4 fields.
+        elif poles in ([0, 2, 4, 6], [0, 2, 4, 6, 8]):
+            P_42_field = F4_cache[:] * np.conj(F2_cache[:])
+            sub_sum_42 = radial_binning(P_42_field, k_bins, k_edge, knorm)
+            total_sum_42 = comm.reduce(sub_sum_42, op=MPI.SUM, root=0)
+
+            if rank == 0:
+                P42 = total_sum_42 / k_num
+                P42 *= 13 / I_norm
+                results["P6b"] = np.real(
+                    11 / 5 * P42 - 52 / 63 * results["P4"] - 286 / 175 * results["P2"]
+                )
+                logging.info(f"Rank {rank}: [fast mode] stored fast estimator P6b.")
+
+            if poles == [0, 2, 4, 6, 8]:
+                P_44_field = F4_cache[:] * np.conj(F4_cache[:])
+                sub_sum_44 = radial_binning(P_44_field, k_bins, k_edge, knorm)
+                total_sum_44 = comm.reduce(sub_sum_44, op=MPI.SUM, root=0)
+
+                if rank == 0:
+                    P44 = total_sum_44 / k_num
+                    P44 *= 17 / I_norm
+                    P44 -= N0 * 17 / 9
+                    results["P8b"] = np.real(
+                        1287 / 490 * P44
+                        - 374 / 245 * P42
+                        - 3553 / 15435 * results["P4"]
+                        - 1326 / 8575 * results["P2"]
+                        - 2431 / 490 * results["P0"]
+                    )
+                    logging.info(f"Rank {rank}: [fast mode] stored fast estimator P8b.")
+
+                del P_44_field, sub_sum_44, total_sum_44
+
+            del P_42_field, sub_sum_42, total_sum_42
+
+        if F2_cache is not None:
+            del F2_cache
+        if F4_cache is not None:
+            del F4_cache
+        gc.collect()
 
     if rank == 0:
         logging.info(f"Rank {rank}: Finished processing all poles")
@@ -297,24 +474,28 @@ def calculate_power_spectrum_survey(stat_attrs, rfield_a, rfield_b, correlation_
         return None
 
 
-
-def calculate_power_spectrum_box(rfield_a, rfield_b, correlation_mode, \
-                                 stat_attrs, comm, **kwargs):
+def calculate_power_spectrum_box(
+    rfield_a, rfield_b, correlation_mode, stat_attrs, comm, **kwargs
+):
     rank = comm.Get_rank()
 
     # Extract mesh attributes
-    poles = stat_attrs['poles']
-    boxsize, nmesh = np.array(stat_attrs['boxsize']), np.array(stat_attrs['nmesh'])
-    k_min, k_max, k_bins = stat_attrs['k_min'], stat_attrs['k_max'], stat_attrs['k_bins']
-    sampler, interlaced = stat_attrs['sampler'], stat_attrs['interlaced']
-    rsd = np.array(stat_attrs['rsd'])
-    P_shot = 1.0/stat_attrs['NZ_a'] if correlation_mode == "auto" else 0.0
+    poles = stat_attrs["poles"]
+    boxsize, nmesh = np.array(stat_attrs["boxsize"]), np.array(stat_attrs["nmesh"])
+    k_min, k_max, k_bins = (
+        stat_attrs["k_min"],
+        stat_attrs["k_max"],
+        stat_attrs["k_bins"],
+    )
+    sampler, interlaced = stat_attrs["sampler"], stat_attrs["interlaced"]
+    rsd = np.array(stat_attrs["rsd"])
+    P_shot = 1.0 / stat_attrs["NZ_a"] if correlation_mode == "auto" else 0.0
 
     if correlation_mode == "cross":
-        NZ_a = stat_attrs['NZ_a']
-        NZ_b = stat_attrs['NZ_b']
+        NZ_a = stat_attrs["NZ_a"]
+        NZ_b = stat_attrs["NZ_b"]
     else:
-        NZ_a = stat_attrs['NZ_a']
+        NZ_a = stat_attrs["NZ_a"]
 
     if rank == 0:
         logging.info(f"Rank {rank}: Using rsd = {rsd}.")
@@ -325,46 +506,49 @@ def calculate_power_spectrum_box(rfield_a, rfield_b, correlation_mode, \
         logging.info(f"Rank {rank}: k_edge = {k_edge}")
     comm.Barrier()
 
-
     # get the compensation mode
     compensation = get_compensation(interlaced, sampler)
 
     # Calculate the Fourier transform of the density field and compensate it
-    cfield_a =  rfield_a.r2c()
+    cfield_a = rfield_a.r2c()
     cfield_a.apply(out=Ellipsis, func=compensation[0][1], kind=compensation[0][2])
 
-    logging.info(f"Rank {rank}: The shape of rfield_a is {rfield_a.shape}, the shape of cfield_a is {cfield_a.shape}.")
+    # logging.info(
+    #     f"Rank {rank}: The shape of rfield_a is {rfield_a.shape}, the shape of cfield_a is {cfield_a.shape}."
+    # )
     if rank == 0:
-        logging.info(f"Rank {rank}: {compensation[0][1].__name__} applied to the density field")
-
+        logging.info(
+            f"Rank {rank}: {compensation[0][1].__name__} applied to the density field"
+        )
 
     if correlation_mode == "cross":
-        cfield_b =  rfield_b.r2c()
+        cfield_b = rfield_b.r2c()
         cfield_b.apply(out=Ellipsis, func=compensation[0][1], kind=compensation[0][2])
         if rank == 0:
-            logging.info(f"Rank {rank}: {compensation[0][1].__name__} applied to the density field")
+            logging.info(
+                f"Rank {rank}: {compensation[0][1].__name__} applied to the density field"
+            )
     else:
         cfield_b = cfield_a
-    
-    # Validate the poles
-    validate_poles(poles)
 
     # Get the kgrid, knorm for binning and Legendre polynomials
     if poles == [0]:  # For ell = 0 only, we do not need to calculate the kgrid
-        knorm = np.sqrt(sum(np.real(kk)**2 for kk in cfield_a.x))
+        knorm = np.sqrt(sum(np.real(kk) ** 2 for kk in cfield_a.x))
         kgrid = None
     else:
         kgrid, knorm = get_kgrid(cfield_a)
 
     # clear zero-mode in the Fourier space
     # note that even for cross power spectrum, we only need to clear the zero-mode of cfield_a
-    # cfield_a[knorm == 0.] = 0. 
+    # cfield_a[knorm == 0.] = 0.
     # we'd better use a smarter way to handle the zero-mode issue
     if knorm[0, 0, 0] == 0.0:
         cfield_a[0, 0, 0] = 0.0 + 0j
         logging.info(f"Rank {rank}: Zero-mode in Fourier space of cfield_a cleared!")
 
-    P_field = np.real(cfield_a[:]) * np.real(cfield_b[:]) + np.imag(cfield_a[:]) * np.imag(cfield_b[:])
+    P_field = np.real(cfield_a[:]) * np.real(cfield_b[:]) + np.imag(
+        cfield_a[:]
+    ) * np.imag(cfield_b[:])
     """
     This operation leverages the hermitian symmetry of the Fourier transform of real fields.
     When summing over all k-modes in a spherical shell (with thickness), it can be shown that:
@@ -389,17 +573,19 @@ def calculate_power_spectrum_box(rfield_a, rfield_b, correlation_mode, \
     if rank == 0:
         k_eff = total_knorm_sum / k_num
 
-    results = {'k_eff': k_eff, "k_num":k_num} if rank == 0 else None
+    results = {"k_eff": k_eff, "k_num": k_num} if rank == 0 else None
 
     # Loop over the poles
     for pole in poles:
         if rank == 0:
             logging.info(f"Rank {rank}: Processing pole {pole}")
 
-        if pole & 1: # for ell = odd, the multipoles are 0 strictly
+        if pole & 1:  # for ell = odd, the multipoles are 0 strictly
             res = np.zeros(k_bins).astype("float128")
             if rank == 0:
-                logging.info(f"Rank {rank}: ell = {pole}, Odd multipoles are automatically set to zero")
+                logging.info(
+                    f"Rank {rank}: ell = {pole}, Odd multipoles are automatically set to zero"
+                )
         else:
             if pole == 0:
                 sub_sum = radial_binning(P_field, k_bins, k_edge, knorm)
@@ -407,18 +593,22 @@ def calculate_power_spectrum_box(rfield_a, rfield_b, correlation_mode, \
                 L_ells = get_legendre(pole, rsd[0], rsd[1], rsd[2])
                 if rank == 0:
                     logging.info(f"Rank {rank}: L_ells = {L_ells.expr}")
-                sub_sum = radial_binning(P_field * L_ells(kgrid[0],kgrid[1],kgrid[2]), \
-                                        k_bins, k_edge, knorm)
-            
+                sub_sum = radial_binning(
+                    P_field * L_ells(kgrid[0], kgrid[1], kgrid[2]),
+                    k_bins,
+                    k_edge,
+                    knorm,
+                )
+
             # Gather the results from all ranks
             total_sum = comm.reduce(sub_sum, op=MPI.SUM, root=0)
 
             if rank == 0:
                 res = total_sum / k_num
                 if correlation_mode == "auto":
-                    res *= boxsize.prod() **(-1)  * (nmesh.prod()**2) / NZ_a**2
+                    res *= boxsize.prod() ** (-1) * (nmesh.prod() ** 2) / NZ_a**2
                 else:
-                    res *= boxsize.prod() **(-1)  * nmesh.prod()**2 / (NZ_a * NZ_b)
+                    res *= boxsize.prod() ** (-1) * nmesh.prod() ** 2 / (NZ_a * NZ_b)
                 """
                 Correction details:
                 Reference: 
@@ -445,14 +635,16 @@ def calculate_power_spectrum_box(rfield_a, rfield_b, correlation_mode, \
                     res -= P_shot
                     logging.info(f"Rank {rank}: Shot noise subtracted from P0")
                 else:
-                    res *= 2*pole+1
+                    res *= 2 * pole + 1
 
         # Store the results
         if rank == 0:
-            results.update({
-                f'P{pole}': res,
-                "P_shot": P_shot,
-            })
+            results.update(
+                {
+                    f"P{pole}": res,
+                    "P_shot": P_shot,
+                }
+            )
             logging.info(f"Rank {rank}: P{pole} calculated")
 
     # Free memory
@@ -465,26 +657,31 @@ def calculate_power_spectrum_box(rfield_a, rfield_b, correlation_mode, \
         return None
 
 
-def calculate_bk_sugi_box(rfield_a, rfield_b, rfield_c, correlation_mode, \
-                          stat_attrs, comm, **kwargs):
+def calculate_bk_sugi_box(
+    rfield_a, rfield_b, rfield_c, correlation_mode, stat_attrs, comm, **kwargs
+):
     rank = comm.Get_rank()
     # Extract mesh attributes
     data_vector_mode = stat_attrs.get("data_vector_mode", "diagonal")
-    block_size = stat_attrs.get("block_size", 1 if data_vector_mode == "diagonal" else "full")
-    [ell_1, ell_2, L] = stat_attrs['angu_config']
-    boxsize = np.array(stat_attrs['boxsize'])
-    nmesh = np.array(stat_attrs['nmesh'])
-    k_min, k_max, k_bins = stat_attrs['k_min'], stat_attrs['k_max'], stat_attrs['k_bins']
-    sampler = stat_attrs['sampler']
-    interlaced = stat_attrs['interlaced']
-    tracer_type = stat_attrs['tracer_type']  # "aaa", "aab", "abb" or "abc"
+    block_size = stat_attrs.get(
+        "block_size", 1 if data_vector_mode == "diagonal" else "full"
+    )
+    [ell_1, ell_2, L] = stat_attrs["angu_config"]
+    boxsize = np.array(stat_attrs["boxsize"])
+    nmesh = np.array(stat_attrs["nmesh"])
+    k_min, k_max, k_bins = (
+        stat_attrs["k_min"],
+        stat_attrs["k_max"],
+        stat_attrs["k_bins"],
+    )
+    sampler = stat_attrs["sampler"]
+    interlaced = stat_attrs["interlaced"]
+    tracer_type = stat_attrs["tracer_type"]  # "aaa", "aab", "abb" or "abc"
     vol_per_cell = boxsize.prod() / nmesh.prod()
 
     # constants related to angular momenta
 
-
-
-    M = 0 # magnetic quantum number for L, only M=0 is considered here
+    M = 0  # magnetic quantum number for L, only M=0 is considered here
     N_ells = (2 * ell_1 + 1) * (2 * ell_2 + 1) * (2 * L + 1)
     H_ells = np.float64(wigner_3j(ell_1, ell_2, L, 0, 0, 0))
     # find all sub-configurations that satisfy the triangular condition
@@ -494,12 +691,12 @@ def calculate_bk_sugi_box(rfield_a, rfield_b, rfield_c, correlation_mode, \
 
     # Extract number density and galaxy count based on correlation mode
     if correlation_mode == "cross":
-        NZ_a, N_gal_a = stat_attrs['NZ_a'], stat_attrs['N_gal_a']
-        NZ_b, N_gal_b = stat_attrs['NZ_b'], stat_attrs['N_gal_b']
+        NZ_a, N_gal_a = stat_attrs["NZ_a"], stat_attrs["N_gal_a"]
+        NZ_b, N_gal_b = stat_attrs["NZ_b"], stat_attrs["N_gal_b"]
         if tracer_type == "abc":
-            NZ_c, N_gal_c = stat_attrs['NZ_c'], stat_attrs['N_gal_c']
+            NZ_c, N_gal_c = stat_attrs["NZ_c"], stat_attrs["N_gal_c"]
     else:
-        NZ_a, N_gal_a = stat_attrs['NZ_a'], stat_attrs['N_gal_a']
+        NZ_a, N_gal_a = stat_attrs["NZ_a"], stat_attrs["N_gal_a"]
 
     # Define k-bin edges
     k_edge = np.linspace(k_min, k_max, k_bins + 1)
@@ -509,41 +706,47 @@ def calculate_bk_sugi_box(rfield_a, rfield_b, rfield_c, correlation_mode, \
     # Get the compensation mode in k-space
     compensation = get_compensation_bk_sugi(sampler)
     if rank == 0:
-        logging.info("In Sugiyama estimator, the interlacing technique is not supported currently.\
-                      Falling back to non-interlaced mode.")
+        logging.info(
+            "In Sugiyama estimator, the interlacing technique is not supported currently.\
+                      Falling back to non-interlaced mode."
+        )
 
     # Recover the density field to physical overdensity
-    rfield_a[:] = (rfield_a[:] / vol_per_cell - NZ_a)
+    rfield_a[:] = rfield_a[:] / vol_per_cell - NZ_a
     if correlation_mode == "cross":
-        rfield_b[:] = (rfield_b[:] / vol_per_cell - NZ_b)
+        rfield_b[:] = rfield_b[:] / vol_per_cell - NZ_b
         if tracer_type == "abc":
-            rfield_c[:] = (rfield_c[:] / vol_per_cell - NZ_c)
-    
+            rfield_c[:] = rfield_c[:] / vol_per_cell - NZ_c
 
     # Calculate the Fourier transform of the density field and apply compensation
     cfield_a = rfield_a.r2c()
     cfield_a.apply(out=Ellipsis, func=compensation[0][1], kind=compensation[0][2])
     # logging.info(f"Rank {rank}: The shape of rfield_a is {rfield_a.shape}, the shape of cfield_a is {cfield_a.shape}.")
     if rank == 0:
-        logging.info(f"Rank {rank}: {compensation[0][1].__name__} applied to the density field a")
+        logging.info(
+            f"Rank {rank}: {compensation[0][1].__name__} applied to the density field a"
+        )
 
     if correlation_mode == "cross":
         cfield_b = rfield_b.r2c()
         cfield_b.apply(out=Ellipsis, func=compensation[0][1], kind=compensation[0][2])
         if rank == 0:
-            logging.info(f"Rank {rank}: {compensation[0][1].__name__} applied to the density field b")
+            logging.info(
+                f"Rank {rank}: {compensation[0][1].__name__} applied to the density field b"
+            )
 
     if correlation_mode == "cross" and tracer_type == "abc":
         cfield_c = rfield_c.r2c()
         cfield_c.apply(out=Ellipsis, func=compensation[0][1], kind=compensation[0][2])
         if rank == 0:
-            logging.info(f"Rank {rank}: {compensation[0][1].__name__} applied to the density field c")
-
+            logging.info(
+                f"Rank {rank}: {compensation[0][1].__name__} applied to the density field c"
+            )
 
     # Get the kgrid, knorm for binning and spherical harmonics
     kgrid, knorm = get_kgrid(cfield_a)
     if rank == 0:
-        logging.info(f"Rank {rank}: kgrid and knorm obtained.")    
+        logging.info(f"Rank {rank}: kgrid and knorm obtained.")
 
     if correlation_mode == "auto":
         G_00 = cfield_a.c2r()
@@ -552,22 +755,26 @@ def calculate_bk_sugi_box(rfield_a, rfield_b, rfield_c, correlation_mode, \
             G_00 = cfield_c.c2r()
         else:
             G_00 = cfield_b.c2r()
-    G_00 = np.real(G_00) # G_00 is strictly to be real
+    G_00 = np.real(G_00)  # G_00 is strictly to be real
     if rank == 0:
         logging.info(f"Rank {rank}: G_00 generated.")
 
     # create the results container
     results = {} if rank == 0 else None
-    
+
     if data_vector_mode == "full":
         if block_size == "full":
             block_size = k_bins
         elif isinstance(block_size, int) and 1 <= block_size <= k_bins:
             pass
         else:
-            raise ValueError("For full mode, block_size must be 1, 'full', or an integer in [1, k_bins].")
+            raise ValueError(
+                "For full mode, block_size must be 1, 'full', or an integer in [1, k_bins]."
+            )
         if rank == 0:
-            logging.info(f"Rank {rank}: Using block_size = {block_size} for full data vector mode.")
+            logging.info(
+                f"Rank {rank}: Using block_size = {block_size} for full data vector mode."
+            )
         # create a full k_bins x k_bins array to store the results,
         total_res = np.zeros((k_bins, k_bins)).astype("complex128")
 
@@ -593,8 +800,8 @@ def calculate_bk_sugi_box(rfield_a, rfield_b, rfield_c, correlation_mode, \
                 ylm_weighted_cfield_2 = cfield_b * ylm_2(kgrid[0], kgrid[1], kgrid[2])
 
             # Symmetry can be used only when both legs are same tracer source and same ell.
-            same_tracer = (correlation_mode == "auto" or tracer_type == "aab")
-            same_ell = (ell_1 == ell_2)
+            same_tracer = correlation_mode == "auto" or tracer_type == "aab"
+            same_ell = ell_1 == ell_2
             can_sym_equal = same_tracer and same_ell and (m1 == m2)
             can_sym_conj = same_tracer and same_ell and (m1 == -m2)
             use_symmetry = can_sym_equal or can_sym_conj
@@ -602,8 +809,10 @@ def calculate_bk_sugi_box(rfield_a, rfield_b, rfield_c, correlation_mode, \
             for bi in range(0, k_bins, block_size):
                 i_end = min(k_bins, bi + block_size)
                 if rank == 0:
-                    logging.info("-"*50)
-                    logging.info(f"Rank {rank}: Processing block rows {bi+1} to {i_end}...")
+                    logging.info("-" * 50)
+                    logging.info(
+                        f"Rank {rank}: Processing block rows {bi+1} to {i_end}..."
+                    )
 
                 # Reuse cache_1 across all bj blocks within this bi block.
                 cache_1 = {}
@@ -612,13 +821,17 @@ def calculate_bk_sugi_box(rfield_a, rfield_b, rfield_c, correlation_mode, \
                 bj_start = bi if use_symmetry else 0
                 for bj in range(bj_start, k_bins, block_size):
                     j_end = min(k_bins, bj + block_size)
-                    block_on_diag = (bi == bj)
+                    block_on_diag = bi == bj
                     if rank == 0:
-                        logging.info(f"Rank {rank}: Processing block columns {bj+1} to {j_end}...")
+                        logging.info(
+                            f"Rank {rank}: Processing block columns {bj+1} to {j_end}..."
+                        )
 
                     for i in range(bi, i_end):
                         if i not in cache_1:
-                            mask_i = np.logical_and(knorm >= k_edge[i], knorm < k_edge[i + 1])
+                            mask_i = np.logical_and(
+                                knorm >= k_edge[i], knorm < k_edge[i + 1]
+                            )
                             cache_1[i] = (ylm_weighted_cfield_1 * mask_i).c2r()
                         binned_field_1 = cache_1[i]
 
@@ -629,19 +842,27 @@ def calculate_bk_sugi_box(rfield_a, rfield_b, rfield_c, correlation_mode, \
                         for j in range(j_local_start, j_end):
                             if can_sym_equal and block_on_diag:
                                 if j not in cache_1:
-                                    mask_j = np.logical_and(knorm >= k_edge[j], knorm < k_edge[j + 1])
+                                    mask_j = np.logical_and(
+                                        knorm >= k_edge[j], knorm < k_edge[j + 1]
+                                    )
                                     cache_1[j] = (ylm_weighted_cfield_1 * mask_j).c2r()
                                 binned_field_2 = cache_1[j]
                             elif can_sym_conj and block_on_diag:
                                 if j not in cache_1:
-                                    mask_j = np.logical_and(knorm >= k_edge[j], knorm < k_edge[j + 1])
+                                    mask_j = np.logical_and(
+                                        knorm >= k_edge[j], knorm < k_edge[j + 1]
+                                    )
                                     cache_1[j] = (ylm_weighted_cfield_1 * mask_j).c2r()
                                 # The phase factor only applies in conjugate symmetry on diagonal blocks.
-                                binned_field_2 = (-1)**(m1 + ell_1) * np.conj(cache_1[j])
+                                binned_field_2 = (-1) ** (m1 + ell_1) * np.conj(
+                                    cache_1[j]
+                                )
                             else:
                                 # Off-diagonal blocks must build cache_2 independently.
                                 if j not in cache_2:
-                                    mask_j = np.logical_and(knorm >= k_edge[j], knorm < k_edge[j + 1])
+                                    mask_j = np.logical_and(
+                                        knorm >= k_edge[j], knorm < k_edge[j + 1]
+                                    )
                                     cache_2[j] = (ylm_weighted_cfield_2 * mask_j).c2r()
                                 binned_field_2 = cache_2[j]
 
@@ -679,17 +900,23 @@ def calculate_bk_sugi_box(rfield_a, rfield_b, rfield_c, correlation_mode, \
             ylm_1 = get_Ylm(ell_1, m1, Racah_normalized=True)
             ylm_2 = get_Ylm(ell_2, m2, Racah_normalized=True)
             if rank == 0:
-                logging.info(f"Rank {rank}: Processing spherical harmonics Y_{ell_1}^{m1} as {ylm_1.expr} and Y_{ell_2}^{m2} as {ylm_2.expr}")
+                logging.info(
+                    f"Rank {rank}: Processing spherical harmonics Y_{ell_1}^{m1} as {ylm_1.expr} and Y_{ell_2}^{m2} as {ylm_2.expr}"
+                )
             ylm_weighted_cfield_1 = cfield_a * ylm_1(kgrid[0], kgrid[1], kgrid[2])
             if tracer_type in ["aaa", "aab"]:
                 if ell_1 != ell_2 or m1 != m2:
-                    ylm_weighted_cfield_2 = cfield_a * ylm_2(kgrid[0], kgrid[1], kgrid[2])
+                    ylm_weighted_cfield_2 = cfield_a * ylm_2(
+                        kgrid[0], kgrid[1], kgrid[2]
+                    )
             else:
                 ylm_weighted_cfield_2 = cfield_b * ylm_2(kgrid[0], kgrid[1], kgrid[2])
 
             # binning in k-space then ifft it to real space
             if rank == 0:
-                logging.info(f"Rank {rank}: Closing triangles in k-space by binning and iffting the weighted cfield...")
+                logging.info(
+                    f"Rank {rank}: Closing triangles in k-space by binning and iffting the weighted cfield..."
+                )
             for i in range(k_bins):
                 if rank == 0:
                     logging.info(f"Rank {rank}: Processing k-bin {i+1}/{k_bins}...")
@@ -700,11 +927,17 @@ def calculate_bk_sugi_box(rfield_a, rfield_b, rfield_c, correlation_mode, \
                         if m1 == 0:
                             binned_field_2 = binned_field_1
                             if rank == 0 and i == 0:
-                                logging.info(f"Rank {rank}: Using the same weighted cfield for b as for a.")
+                                logging.info(
+                                    f"Rank {rank}: Using the same weighted cfield for b as for a."
+                                )
                         else:
-                            binned_field_2 =  (-1)**(m1 + ell_1) * np.conj(binned_field_1)  #the additional phase factor can be found in our methodology paper
+                            binned_field_2 = (-1) ** (m1 + ell_1) * np.conj(
+                                binned_field_1
+                            )  # the additional phase factor can be found in our methodology paper
                             if rank == 0 and i == 0:
-                                logging.info(f"Rank {rank}: Using the conjugate of weighted cfield a for b.")
+                                logging.info(
+                                    f"Rank {rank}: Using the conjugate of weighted cfield a for b."
+                                )
                     else:
                         binned_field_2 = (ylm_weighted_cfield_2 * mask).c2r()
                 else:
@@ -734,7 +967,6 @@ def calculate_bk_sugi_box(rfield_a, rfield_b, rfield_c, correlation_mode, \
     if rank == 0:
         k_eff = total_knorm_sum / k_num
 
-    
     """
     Now we obtain the shot-noise, we define 4 terms in EQ45 of Sugiyama 2019 as SN0, SN1, SN2, SN3
     """
@@ -742,7 +974,9 @@ def calculate_bk_sugi_box(rfield_a, rfield_b, rfield_c, correlation_mode, \
     if tracer_type == "abc":
         SN0, SN1, SN2, SN3 = 0.0, 0.0, 0.0, 0.0
         if rank == 0:
-            logging.info("Tracer type 'abc' detected, shot-noise terms are all set to zero.")
+            logging.info(
+                "Tracer type 'abc' detected, shot-noise terms are all set to zero."
+            )
     else:
         # SN0
         if correlation_mode == "auto" and [ell_1, ell_2, L] == [0, 0, 0]:
@@ -753,22 +987,32 @@ def calculate_bk_sugi_box(rfield_a, rfield_b, rfield_c, correlation_mode, \
         """
         The logic of this part can be found in our methodology paper. The Q_0 term is necessary.
         """
-        P_field = cfield_a[:] * np.conj(cfield_a[:] if correlation_mode == "auto" else cfield_b[:])
+        P_field = cfield_a[:] * np.conj(
+            cfield_a[:] if correlation_mode == "auto" else cfield_b[:]
+        )
         P_field *= boxsize.prod() ** 2
 
         if correlation_mode == "auto":
             S_field = cfield_a.copy()
             S_field[:] = SN0
-            S_field.apply(out=Ellipsis, func=get_compensation_shot_sugi(sampler)[0][1], kind="circular")
+            S_field.apply(
+                out=Ellipsis,
+                func=get_compensation_shot_sugi(sampler)[0][1],
+                kind="circular",
+            )
             if rank == 0:
-                logging.info(f"Rank {rank}: Shot-noise compensation applied for field a.")
+                logging.info(
+                    f"Rank {rank}: Shot-noise compensation applied for field a."
+                )
             P_field[:] -= S_field[:]
-        
-        if L != 0: # multiply by y_L0
+
+        if L != 0:  # multiply by y_L0
             y_L0 = get_Ylm(L, 0, Racah_normalized=True)
             P_field *= y_L0(kgrid[0], kgrid[1], kgrid[2])
             if rank == 0:
-                logging.info(f"Rank {rank}: Multiplying by spherical harmonic Y_{L}^{0} as {y_L0.expr} for SN1 and SN2 calculation.")
+                logging.info(
+                    f"Rank {rank}: Multiplying by spherical harmonic Y_{L}^{0} as {y_L0.expr} for SN1 and SN2 calculation."
+                )
 
         # Perform radial binning
         sub_sum = radial_binning(P_field, k3_bins, k3_edge, knorm)
@@ -778,17 +1022,17 @@ def calculate_bk_sugi_box(rfield_a, rfield_b, rfield_c, correlation_mode, \
             SN1, SN2 = 0.0, 0.0
             if ell_1 == L and ell_2 == 0:
                 if correlation_mode == "auto":
-                    SN1 = (total_sum / k_num)[:len(k_center)]
+                    SN1 = (total_sum / k_num)[: len(k_center)]
                     SN1 *= 2 * L + 1
                     if ell_1 == 0:
                         SN2 = SN1.copy()
                 elif correlation_mode == "cross" and tracer_type == "abb":
-                    SN1 = (total_sum / k_num)[:len(k_center)]
+                    SN1 = (total_sum / k_num)[: len(k_center)]
                     SN1 *= 2 * L + 1
             # Convert the 1d vector to (k1,k2) plane, note that SN1 is only related to k1, SN2 is only related to k2,
             if data_vector_mode == "full":
-                SN1_full = np.zeros((k_bins, k_bins)).astype('c16')
-                SN2_full = np.zeros((k_bins, k_bins)).astype('c16')
+                SN1_full = np.zeros((k_bins, k_bins)).astype("c16")
+                SN2_full = np.zeros((k_bins, k_bins)).astype("c16")
                 if np.isscalar(SN1) or np.ndim(SN1) == 0:
                     SN1_full[:] = SN1
                 else:
@@ -809,42 +1053,71 @@ def calculate_bk_sugi_box(rfield_a, rfield_b, rfield_c, correlation_mode, \
             else:
                 weighted_k_num = k_num / k3_center
                 if data_vector_mode == "diagonal":
-                    SN3 = np.zeros(k_bins).astype('c16')
+                    SN3 = np.zeros(k_bins).astype("c16")
                     if rank == 0:
                         for i in range(k_bins):
-                            coeff_assoc_legendre = np.zeros(k3_bins).astype('f8')
+                            coeff_assoc_legendre = np.zeros(k3_bins).astype("f8")
                             for xx in range(len(magnetic_configs)):
                                 (m1, m2, M) = magnetic_configs[xx]
                                 # three_j = three_j_values[xx]
-                                q_ells  = get_q_ells(i,i,k_center, k_min,k_max,k_bins, ell_1, ell_2, L, k3_bins)
-                            SN3[i] = np.sum(q_ells * total_sum / k3_center) / np.sum(weighted_k_num[:2 * i+1])
+                                q_ells = get_q_ells(
+                                    i,
+                                    i,
+                                    k_center,
+                                    k_min,
+                                    k_max,
+                                    k_bins,
+                                    ell_1,
+                                    ell_2,
+                                    L,
+                                    k3_bins,
+                                )
+                            SN3[i] = np.sum(q_ells * total_sum / k3_center) / np.sum(
+                                weighted_k_num[: 2 * i + 1]
+                            )
                         SN3 *= H_ells * N_ells
                 elif data_vector_mode == "full":
-                    SN3 = np.zeros((k_bins, k_bins)).astype('c16')
+                    SN3 = np.zeros((k_bins, k_bins)).astype("c16")
                     if rank == 0:
                         for i in range(k_bins):
                             for j in range(k_bins):
-                                q_ells  = get_q_ells(i,j,k_center, k_min,k_max,k_bins, ell_1, ell_2, L, k3_bins)
-                                valid_k3_bins = get_valid_k3_bins(k_center[i], k_center[j], k_min, k_max, k_bins)
-                                SN3[i, j] = np.sum(q_ells * total_sum / k3_center) / np.sum(weighted_k_num * valid_k3_bins)
+                                q_ells = get_q_ells(
+                                    i,
+                                    j,
+                                    k_center,
+                                    k_min,
+                                    k_max,
+                                    k_bins,
+                                    ell_1,
+                                    ell_2,
+                                    L,
+                                    k3_bins,
+                                )
+                                valid_k3_bins = get_valid_k3_bins(
+                                    k_center[i], k_center[j], k_min, k_max, k_bins
+                                )
+                                SN3[i, j] = np.sum(
+                                    q_ells * total_sum / k3_center
+                                ) / np.sum(weighted_k_num * valid_k3_bins)
                     SN3 *= H_ells * N_ells
 
     time_shotnoise_end = time.time()
     if rank == 0:
-        logging.info(f"Rank{rank}: Time to compute shot noise terms: {time_shotnoise_end - time_shotnoise_start:.2f} seconds")
+        logging.info(
+            f"Rank{rank}: Time to compute shot noise terms: {time_shotnoise_end - time_shotnoise_start:.2f} seconds"
+        )
 
     # Normalize the bispectrum
     if rank == 0:
         if correlation_mode == "auto":
-            I_norm = (N_gal_a ** 3) / (boxsize.prod() ** 2)
+            I_norm = (N_gal_a**3) / (boxsize.prod() ** 2)
         else:
             if tracer_type == "aab":
-                I_norm = (N_gal_a ** 2 * N_gal_b) / (boxsize.prod() ** 2)
+                I_norm = (N_gal_a**2 * N_gal_b) / (boxsize.prod() ** 2)
             elif tracer_type == "abb":
-                I_norm = (N_gal_a * N_gal_b ** 2) / (boxsize.prod() ** 2)
+                I_norm = (N_gal_a * N_gal_b**2) / (boxsize.prod() ** 2)
             elif tracer_type == "abc":
                 I_norm = (N_gal_a * N_gal_b * N_gal_c) / (boxsize.prod() ** 2)
-
 
         # Combine shot-noise terms.
         # For full mode we keep shot-noise subtraction disabled for now to validate signal first.
@@ -852,35 +1125,38 @@ def calculate_bk_sugi_box(rfield_a, rfield_b, rfield_c, correlation_mode, \
         total_shot_noise = SN0 + SN1 + SN2 + SN3
 
         # Normalize the bispectrum result.
-        total_res *= N_ells * H_ells  / I_norm
+        total_res *= N_ells * H_ells / I_norm
         if data_vector_mode == "full":
-            total_res *= (boxsize.prod()) ** 2 / np.outer(k_num[:k_bins],k_num[:k_bins])
+            total_res *= (boxsize.prod()) ** 2 / np.outer(
+                k_num[:k_bins], k_num[:k_bins]
+            )
         else:
-            total_res *= (boxsize.prod()) ** 2 / (k_num[:len(total_res)])**2
+            total_res *= (boxsize.prod()) ** 2 / (k_num[: len(total_res)]) ** 2
 
         total_res *= vol_per_cell
         total_shot_noise *= 1 / I_norm
         # Final bispectrum result after subtracting shot-noise
-        final_bk = total_res  - total_shot_noise
+        final_bk = total_res - total_shot_noise
 
         logging.info(f"Rank {rank}: Final bispectrum calculated.")
 
-            # Store the results
-        results.update({
-            'B_sugi': final_bk,
-            'SN_terms': {
-                'SN0': SN0/I_norm,
-                'SN1': SN1/I_norm,
-                'SN2': SN2/I_norm,
-                'SN3': SN3/I_norm
-            },
-            'I_norm': I_norm,
-            "Shot_noise": total_shot_noise,
-            "Bk_raw": total_res,
-            "k_eff": k_eff,
-            'nmodes': k_num
-        })
-
+        # Store the results
+        results.update(
+            {
+                "B_sugi": final_bk,
+                "SN_terms": {
+                    "SN0": SN0 / I_norm,
+                    "SN1": SN1 / I_norm,
+                    "SN2": SN2 / I_norm,
+                    "SN3": SN3 / I_norm,
+                },
+                "I_norm": I_norm,
+                "Shot_noise": total_shot_noise,
+                "Bk_raw": total_res,
+                "k_eff": k_eff,
+                "nmodes": k_num,
+            }
+        )
 
     # broadcast results to all ranks
     results = comm.bcast(results, root=0)
@@ -890,8 +1166,9 @@ def calculate_bk_sugi_box(rfield_a, rfield_b, rfield_c, correlation_mode, \
     return results
 
 
-def calculate_bk_sugi_survey(rfield_a, rfield_b, rfield_c, correlation_mode, \
-                             stat_attrs, comm, **kwargs):
+def calculate_bk_sugi_survey(
+    rfield_a, rfield_b, rfield_c, correlation_mode, stat_attrs, comm, **kwargs
+):
     """
     Survey-like Sugiyama bispectrum estimator (signal-only version).
 
@@ -919,13 +1196,20 @@ def calculate_bk_sugi_survey(rfield_a, rfield_b, rfield_c, correlation_mode, \
     def _log(_level, stage, msg):
         if rank == 0:
             logging.info(f"[BK-SURVEY][{stage}] {msg}")
+
     data_vector_mode = stat_attrs.get("data_vector_mode", "diagonal")
-    block_size = stat_attrs.get("block_size", 1 if data_vector_mode == "diagonal" else "full")
+    block_size = stat_attrs.get(
+        "block_size", 1 if data_vector_mode == "diagonal" else "full"
+    )
     [ell_1, ell_2, L] = stat_attrs["angu_config"]
     boxsize = np.array(stat_attrs["boxsize"])
     nmesh = np.array(stat_attrs["nmesh"])
     boxcenter = np.array(stat_attrs["boxcenter"])
-    k_min, k_max, k_bins = stat_attrs["k_min"], stat_attrs["k_max"], stat_attrs["k_bins"]
+    k_min, k_max, k_bins = (
+        stat_attrs["k_min"],
+        stat_attrs["k_max"],
+        stat_attrs["k_bins"],
+    )
     sampler = stat_attrs["sampler"]
     tracer_type = stat_attrs["tracer_type"]
     I_norm = stat_attrs["I_norm"]
@@ -975,7 +1259,6 @@ def calculate_bk_sugi_survey(rfield_a, rfield_b, rfield_c, correlation_mode, \
     else:
         rfield3 = rfield_c if tracer_type == "abc" else rfield_b
 
-
     # ------------------------------------------------------------------
     # Step A: Prepare stream-style G_{L,M} evaluation.
     # We keep only one G_{L,M} in memory at any time:
@@ -990,8 +1273,8 @@ def calculate_bk_sugi_survey(rfield_a, rfield_b, rfield_c, correlation_mode, \
     cfg_to_idx = {cfg: ii for ii, cfg in enumerate(magnetic_configs)}
     processed_cfg = set()
     # Whether the first and second factors use the same tracer source.
-    same_tracer_12 = (correlation_mode == "auto" or tracer_type == "aab")
-    same_ell_12 = (ell_1 == ell_2)
+    same_tracer_12 = correlation_mode == "auto" or tracer_type == "aab"
+    same_ell_12 = ell_1 == ell_2
     total_cfg_count = len(magnetic_configs)
     skipped_cfg_count = 0
     evaluated_cfg_count = 0
@@ -1002,7 +1285,9 @@ def calculate_bk_sugi_survey(rfield_a, rfield_b, rfield_c, correlation_mode, \
         elif isinstance(block_size, int) and 1 <= block_size <= k_bins:
             pass
         else:
-            raise ValueError("For full mode, block_size must be 1, 'full', or an integer in [1, k_bins].")
+            raise ValueError(
+                "For full mode, block_size must be 1, 'full', or an integer in [1, k_bins]."
+            )
         _log(1, "INIT", f"full_mode block_size={block_size}")
 
         total_res = np.zeros((k_bins, k_bins)).astype("complex128")
@@ -1029,11 +1314,15 @@ def calculate_bk_sugi_survey(rfield_a, rfield_b, rfield_c, correlation_mode, \
                 ylm_LM = get_Ylm(L, M, Racah_normalized=True)
                 rfield_weighted_third = rfield3 * ylm_LM(xgrid[0], xgrid[1], xgrid[2])
                 cfield_GLM = rfield_weighted_third.r2c()
-                cfield_GLM.apply(out=Ellipsis, func=compensation[0][1], kind=compensation[0][2])
+                cfield_GLM.apply(
+                    out=Ellipsis, func=compensation[0][1], kind=compensation[0][2]
+                )
                 # cfield_GLM[:] *= boxsize.prod()
                 G_LM_current = cfield_GLM.c2r()
                 current_M = M
-                _log(1, "GLM", f"sub_cfg={ss+1}/{total_cfg_count} M={M} action=recompute")
+                _log(
+                    1, "GLM", f"sub_cfg={ss+1}/{total_cfg_count} M={M} action=recompute"
+                )
                 del rfield_weighted_third, cfield_GLM
                 gc.collect()
 
@@ -1054,9 +1343,15 @@ def calculate_bk_sugi_survey(rfield_a, rfield_b, rfield_c, correlation_mode, \
             if tracer_type in ["aaa", "aab"]:
                 if ell_1 == ell_2 and m1 == m2:
                     ylm_weighted_cfield_2 = ylm_weighted_cfield_1
-                    _log(2, "CFG", "field2_source=reuse_field1 (same tracer, same ell, m1==m2)")
+                    _log(
+                        2,
+                        "CFG",
+                        "field2_source=reuse_field1 (same tracer, same ell, m1==m2)",
+                    )
                 else:
-                    ylm_weighted_cfield_2 = cfield_a * ylm_2(kgrid[0], kgrid[1], kgrid[2])
+                    ylm_weighted_cfield_2 = cfield_a * ylm_2(
+                        kgrid[0], kgrid[1], kgrid[2]
+                    )
                     _log(2, "CFG", "field2_source=tracer_a")
             else:
                 ylm_weighted_cfield_2 = cfield_b * ylm_2(kgrid[0], kgrid[1], kgrid[2])
@@ -1084,11 +1379,13 @@ def calculate_bk_sugi_survey(rfield_a, rfield_b, rfield_c, correlation_mode, \
                 cache_1 = {}
                 cache_2 = {}
                 bj_start = bi if use_symmetry else 0
-                _log(2, "BLOCK", f"sub_cfg={ss+1}/{total_cfg_count} row=[{bi},{i_end-1}]")
+                _log(
+                    2, "BLOCK", f"sub_cfg={ss+1}/{total_cfg_count} row=[{bi},{i_end-1}]"
+                )
 
                 for bj in range(bj_start, k_bins, block_size):
                     j_end = min(k_bins, bj + block_size)
-                    block_on_diag = (bi == bj)
+                    block_on_diag = bi == bj
                     _log(
                         2,
                         "BLOCK",
@@ -1096,7 +1393,9 @@ def calculate_bk_sugi_survey(rfield_a, rfield_b, rfield_c, correlation_mode, \
                     )
                     for i in range(bi, i_end):
                         if i not in cache_1:
-                            mask_i = np.logical_and(knorm >= k_edge[i], knorm < k_edge[i + 1])
+                            mask_i = np.logical_and(
+                                knorm >= k_edge[i], knorm < k_edge[i + 1]
+                            )
                             cache_1[i] = (ylm_weighted_cfield_1 * mask_i).c2r()
                         binned_field_1 = cache_1[i]
 
@@ -1107,21 +1406,31 @@ def calculate_bk_sugi_survey(rfield_a, rfield_b, rfield_c, correlation_mode, \
                         for j in range(j_local_start, j_end):
                             if can_sym_equal and block_on_diag:
                                 if j not in cache_1:
-                                    mask_j = np.logical_and(knorm >= k_edge[j], knorm < k_edge[j + 1])
+                                    mask_j = np.logical_and(
+                                        knorm >= k_edge[j], knorm < k_edge[j + 1]
+                                    )
                                     cache_1[j] = (ylm_weighted_cfield_1 * mask_j).c2r()
                                 binned_field_2 = cache_1[j]
                             elif can_sym_conj and block_on_diag:
                                 if j not in cache_1:
-                                    mask_j = np.logical_and(knorm >= k_edge[j], knorm < k_edge[j + 1])
+                                    mask_j = np.logical_and(
+                                        knorm >= k_edge[j], knorm < k_edge[j + 1]
+                                    )
                                     cache_1[j] = (ylm_weighted_cfield_1 * mask_j).c2r()
-                                binned_field_2 = (-1) ** (m1 + ell_1) * np.conj(cache_1[j])
+                                binned_field_2 = (-1) ** (m1 + ell_1) * np.conj(
+                                    cache_1[j]
+                                )
                             else:
                                 if j not in cache_2:
-                                    mask_j = np.logical_and(knorm >= k_edge[j], knorm < k_edge[j + 1])
+                                    mask_j = np.logical_and(
+                                        knorm >= k_edge[j], knorm < k_edge[j + 1]
+                                    )
                                     cache_2[j] = (ylm_weighted_cfield_2 * mask_j).c2r()
                                 binned_field_2 = cache_2[j]
 
-                            sub_sig_sum = np.sum(G_LM_current * binned_field_1 * binned_field_2)
+                            sub_sig_sum = np.sum(
+                                G_LM_current * binned_field_1 * binned_field_2
+                            )
                             total_sig_sum = comm.reduce(sub_sig_sum, op=MPI.SUM, root=0)
                             if rank == 0:
                                 sub_res[i, j] = three_j_values[ss] * total_sig_sum
@@ -1153,7 +1462,12 @@ def calculate_bk_sugi_survey(rfield_a, rfield_b, rfield_c, correlation_mode, \
             # if (m2, m1, M) exists and ell_1 == ell_2 with same tracer source,
             # its result is the transpose of current one.
             swap_cfg = (m2, m1, M)
-            has_swap = same_tracer_12 and same_ell_12 and (swap_cfg in cfg_to_idx) and (swap_cfg != (m1, m2, M))
+            has_swap = (
+                same_tracer_12
+                and same_ell_12
+                and (swap_cfg in cfg_to_idx)
+                and (swap_cfg != (m1, m2, M))
+            )
             add_swap_now = has_swap and (swap_cfg not in processed_cfg)
 
             if rank == 0:
@@ -1171,11 +1485,23 @@ def calculate_bk_sugi_survey(rfield_a, rfield_b, rfield_c, correlation_mode, \
                 # configs, add 2*Re(.) to include conjugate partner.
                 if magnetic_configs[ss] == (0, 0, 0):
                     total_res += sub_res_to_add
-                    _log(2, "ACC", f"sub_cfg={ss+1}/{total_cfg_count} action=accumulate rule=self_conjugate_once")
+                    _log(
+                        2,
+                        "ACC",
+                        f"sub_cfg={ss+1}/{total_cfg_count} action=accumulate rule=self_conjugate_once",
+                    )
                 else:
                     total_res += 2 * np.real(sub_res_to_add)
-                    _log(2, "ACC", f"sub_cfg={ss+1}/{total_cfg_count} action=accumulate rule=2*Re")
-                _log(1, "CFG", f"sub_cfg={ss+1}/{total_cfg_count} action=done elapsed={time.time()-cfg_t0:.2f}s")
+                    _log(
+                        2,
+                        "ACC",
+                        f"sub_cfg={ss+1}/{total_cfg_count} action=accumulate rule=2*Re",
+                    )
+                _log(
+                    1,
+                    "CFG",
+                    f"sub_cfg={ss+1}/{total_cfg_count} action=done elapsed={time.time()-cfg_t0:.2f}s",
+                )
 
             # IMPORTANT (MPI consistency): update processed_cfg identically on all ranks.
             if add_swap_now:
@@ -1189,19 +1515,37 @@ def calculate_bk_sugi_survey(rfield_a, rfield_b, rfield_c, correlation_mode, \
         total_res = np.zeros(k_bins).astype("complex128")
         diagonal_mask_cache = {}
         diagonal_binned_field2_cache = {}
-        diagonal_reuse_fixed_m2_leg = (ell_2 == 0 and all(cfg[1] == 0 for cfg in magnetic_configs))
+        diagonal_reuse_fixed_m2_leg = ell_2 == 0 and all(
+            cfg[1] == 0 for cfg in magnetic_configs
+        )
         diagonal_shared_weighted_cfield_2 = None
 
         if diagonal_reuse_fixed_m2_leg:
             ylm_2_shared = get_Ylm(ell_2, 0, Racah_normalized=True)
             if tracer_type in ["aaa", "aab"]:
-                diagonal_shared_weighted_cfield_2 = cfield_a * ylm_2_shared(kgrid[0], kgrid[1], kgrid[2])
-                _log(1, "DIAG-CACHE", "reuse_enabled: fixed second leg uses tracer_a with ell_2=0, m2=0 across sub-configs.")
+                diagonal_shared_weighted_cfield_2 = cfield_a * ylm_2_shared(
+                    kgrid[0], kgrid[1], kgrid[2]
+                )
+                _log(
+                    1,
+                    "DIAG-CACHE",
+                    "reuse_enabled: fixed second leg uses tracer_a with ell_2=0, m2=0 across sub-configs.",
+                )
             else:
-                diagonal_shared_weighted_cfield_2 = cfield_b * ylm_2_shared(kgrid[0], kgrid[1], kgrid[2])
-                _log(1, "DIAG-CACHE", "reuse_enabled: fixed second leg uses tracer_b with ell_2=0, m2=0 across sub-configs.")
+                diagonal_shared_weighted_cfield_2 = cfield_b * ylm_2_shared(
+                    kgrid[0], kgrid[1], kgrid[2]
+                )
+                _log(
+                    1,
+                    "DIAG-CACHE",
+                    "reuse_enabled: fixed second leg uses tracer_b with ell_2=0, m2=0 across sub-configs.",
+                )
         else:
-            _log(1, "DIAG-CACHE", "reuse_disabled: second leg is not globally fixed to ell_2=0, m2=0.")
+            _log(
+                1,
+                "DIAG-CACHE",
+                "reuse_disabled: second leg is not globally fixed to ell_2=0, m2=0.",
+            )
 
         for ss in range(len(magnetic_configs)):
             (m1, m2, M) = magnetic_configs[ss]
@@ -1224,11 +1568,15 @@ def calculate_bk_sugi_survey(rfield_a, rfield_b, rfield_c, correlation_mode, \
                 ylm_LM = get_Ylm(L, M, Racah_normalized=True)
                 rfield_weighted_third = rfield3 * ylm_LM(xgrid[0], xgrid[1], xgrid[2])
                 cfield_GLM = rfield_weighted_third.r2c()
-                cfield_GLM.apply(out=Ellipsis, func=compensation[0][1], kind=compensation[0][2])
+                cfield_GLM.apply(
+                    out=Ellipsis, func=compensation[0][1], kind=compensation[0][2]
+                )
                 # cfield_GLM[:] *= boxsize.prod()
                 G_LM_current = cfield_GLM.c2r()
                 current_M = M
-                _log(1, "GLM", f"sub_cfg={ss+1}/{total_cfg_count} M={M} action=recompute")
+                _log(
+                    1, "GLM", f"sub_cfg={ss+1}/{total_cfg_count} M={M} action=recompute"
+                )
                 del rfield_weighted_third, cfield_GLM
                 gc.collect()
 
@@ -1268,7 +1616,12 @@ def calculate_bk_sugi_survey(rfield_a, rfield_b, rfield_c, correlation_mode, \
                     sub_res[i] = three_j_values[ss] * total_sig_sum
 
             swap_cfg = (m2, m1, M)
-            has_swap = same_tracer_12 and same_ell_12 and (swap_cfg in cfg_to_idx) and (swap_cfg != (m1, m2, M))
+            has_swap = (
+                same_tracer_12
+                and same_ell_12
+                and (swap_cfg in cfg_to_idx)
+                and (swap_cfg != (m1, m2, M))
+            )
             add_swap_now = has_swap and (swap_cfg not in processed_cfg)
 
             if rank == 0:
@@ -1284,10 +1637,18 @@ def calculate_bk_sugi_survey(rfield_a, rfield_b, rfield_c, correlation_mode, \
 
                 if magnetic_configs[ss] == (0, 0, 0):
                     total_res += sub_res_to_add
-                    _log(2, "ACC", f"sub_cfg={ss+1}/{total_cfg_count} action=accumulate rule=self_conjugate_once")
+                    _log(
+                        2,
+                        "ACC",
+                        f"sub_cfg={ss+1}/{total_cfg_count} action=accumulate rule=self_conjugate_once",
+                    )
                 else:
                     total_res += 2 * np.real(sub_res_to_add)
-                    _log(2, "ACC", f"sub_cfg={ss+1}/{total_cfg_count} action=accumulate rule=2*Re")
+                    _log(
+                        2,
+                        "ACC",
+                        f"sub_cfg={ss+1}/{total_cfg_count} action=accumulate rule=2*Re",
+                    )
 
             # IMPORTANT (MPI consistency): update processed_cfg identically on all ranks.
             if add_swap_now:
@@ -1315,9 +1676,9 @@ def calculate_bk_sugi_survey(rfield_a, rfield_b, rfield_c, correlation_mode, \
 
     catalogs = kwargs.get("catalogs", None)
     if catalogs is None:
-        raise ValueError("catalogs must be provided to calculate_bk_sugi_survey for N_field construction.")
-    
-    
+        raise ValueError(
+            "catalogs must be provided to calculate_bk_sugi_survey for N_field construction."
+        )
 
     # Keep only the necessary rfield references for shot-noise terms.
     # These are references (no memory copy).
@@ -1336,7 +1697,11 @@ def calculate_bk_sugi_survey(rfield_a, rfield_b, rfield_c, correlation_mode, \
     # 3) tracer_type == "abb": only rfield_a; only N_field_b
     # 4) all other cases: only rfield_a; only N_field_a
     if tracer_type == "abc":
-        _log(1, "SHOT", "tracer_type=abc -> skip rfield/N_field construction (shotnoise=0).")
+        _log(
+            1,
+            "SHOT",
+            "tracer_type=abc -> skip rfield/N_field construction (shotnoise=0).",
+        )
     elif tracer_type == "aab":
         rfield_shot_b = rfield_b
         N_field_a = get_N_field(
@@ -1400,7 +1765,11 @@ def calculate_bk_sugi_survey(rfield_a, rfield_b, rfield_c, correlation_mode, \
 
     _log(1, "SHOT", "N_field construction finished")
 
-    _log(1, "SUMMARY", f"evaluated={evaluated_cfg_count} skipped={skipped_cfg_count} total={total_cfg_count}")
+    _log(
+        1,
+        "SUMMARY",
+        f"evaluated={evaluated_cfg_count} skipped={skipped_cfg_count} total={total_cfg_count}",
+    )
 
     k_center = 0.5 * (k_edge[1:] + k_edge[:-1])
     k3_min, k3_max = 2 * k_min, 2 * k_max
@@ -1412,7 +1781,7 @@ def calculate_bk_sugi_survey(rfield_a, rfield_b, rfield_c, correlation_mode, \
     k_num_k3 = comm.bcast(k_num_k3 if rank == 0 else None, root=0)
 
     # calculate shot-noise terms
-    def calculate_shot_noise_S1_like(rfield_shot, N_field_shot, S_LM_shot = None):
+    def calculate_shot_noise_S1_like(rfield_shot, N_field_shot, S_LM_shot=None):
         """
         Compute S1-like one-dimensional shot-noise term S(k1) for survey mode.
         This helper is kept inside calculate_bk_sugi_survey to reuse local variables.
@@ -1425,22 +1794,32 @@ def calculate_bk_sugi_survey(rfield_a, rfield_b, rfield_c, correlation_mode, \
         S1_local = np.zeros(k_bins, dtype="complex128")
 
         if not (ell_1 == L and ell_2 == 0):
-            _log(1, "SHOT", "S1-like skipped: Kronecker condition ell_1==L and ell_2==0 not satisfied.")
+            _log(
+                1,
+                "SHOT",
+                "S1-like skipped: Kronecker condition ell_1==L and ell_2==0 not satisfied.",
+            )
             return S1_local
         if (rfield_shot is None) or (N_field_shot is None):
             _log(1, "SHOT", "S1-like skipped: rfield_shot or N_field_shot is None.")
             return S1_local
 
         cfield_delta = rfield_shot.r2c()
-        cfield_delta.apply(out=Ellipsis, func=compensation[0][1], kind=compensation[0][2])
+        cfield_delta.apply(
+            out=Ellipsis, func=compensation[0][1], kind=compensation[0][2]
+        )
         cfield_delta[:] *= boxsize.prod()
 
         # Sbar term is only needed for same-tracer case.
-        use_sbar_term = (correlation_mode == "auto" and tracer_type == "aaa")
+        use_sbar_term = correlation_mode == "auto" and tracer_type == "aaa"
         if use_sbar_term:
             if S_LM_shot is None:
                 S_LM_arr = np.zeros(L + 1, dtype="complex128")
-                _log(1, "SHOT-S1", "use S_LM correction with default zeros (S_LM_shot is None)")
+                _log(
+                    1,
+                    "SHOT-S1",
+                    "use S_LM correction with default zeros (S_LM_shot is None)",
+                )
             elif np.isscalar(S_LM_shot):
                 S_LM_arr = np.zeros(L + 1, dtype="complex128")
                 S_LM_arr[0] = S_LM_shot
@@ -1463,19 +1842,25 @@ def calculate_bk_sugi_survey(rfield_a, rfield_b, rfield_c, correlation_mode, \
 
             rfield_NLM = N_field_shot * y_LM(xgrid[0], xgrid[1], xgrid[2])
             cfield_NLM = rfield_NLM.r2c()
-            cfield_NLM.apply(out=Ellipsis, func=compensation[0][1], kind=compensation[0][2])
+            cfield_NLM.apply(
+                out=Ellipsis, func=compensation[0][1], kind=compensation[0][2]
+            )
             cfield_NLM[:] *= boxsize.prod()
 
             term_field = cfield_delta[:] * np.conj(cfield_NLM[:])
 
             if use_sbar_term:
-                Sbar_LM = S_LM_arr[M] 
+                Sbar_LM = S_LM_arr[M]
                 S_field = cfield_delta.copy()
                 S_field[:] = Sbar_LM
-                S_field.apply(out=Ellipsis, func=compensation_shot_sugi[0][1], kind=compensation_shot_sugi[0][2])
+                S_field.apply(
+                    out=Ellipsis,
+                    func=compensation_shot_sugi[0][1],
+                    kind=compensation_shot_sugi[0][2],
+                )
                 term_field[:] -= S_field[:]
                 del S_field
-            
+
             term_field *= y_LM(kgrid[0], kgrid[1], kgrid[2])
             accum_field += m_weight * term_field
             del rfield_NLM, cfield_NLM, term_field
@@ -1486,8 +1871,14 @@ def calculate_bk_sugi_survey(rfield_a, rfield_b, rfield_c, correlation_mode, \
         total_sum = comm.reduce(sub_sum_total, op=MPI.SUM, root=0)
         if rank == 0:
             valid_mask = k_num > 0
-            S1_local[valid_mask] = (2 * L + 1) * total_sum[valid_mask] / k_num[valid_mask]
-        _log(1, "SHOT-S1", "finished M accumulation, single radial binning, and 2*Re on binned vector.")
+            S1_local[valid_mask] = (
+                (2 * L + 1) * total_sum[valid_mask] / k_num[valid_mask]
+            )
+        _log(
+            1,
+            "SHOT-S1",
+            "finished M accumulation, single radial binning, and 2*Re on binned vector.",
+        )
         S1_local = comm.bcast(S1_local if rank == 0 else None, root=0)
 
         del cfield_delta, accum_field, sub_sum_total
@@ -1503,7 +1894,7 @@ def calculate_bk_sugi_survey(rfield_a, rfield_b, rfield_c, correlation_mode, \
             _log(1, "SHOT-S3", "Q_L skipped: rfield_shot or N_field_shot is None.")
             return Q_like
 
-        use_sbar_term = (correlation_mode == "auto" and tracer_type == "aaa")
+        use_sbar_term = correlation_mode == "auto" and tracer_type == "aaa"
         if use_sbar_term:
             if S_LM_shot is None:
                 S_LM_arr = np.zeros(L + 1, dtype="complex128")
@@ -1526,14 +1917,16 @@ def calculate_bk_sugi_survey(rfield_a, rfield_b, rfield_c, correlation_mode, \
 
         _log(1, "SHOT-S3", f"start Q_L loop M=[0,{L}] use_sbar_term={use_sbar_term}")
         accum_field = np.zeros_like(cfield_N00[:], dtype="complex128")
-        for M in range(0, L + 1):   
+        for M in range(0, L + 1):
             M_weight = 0.5 if M == 0 else 1.0
             _log(2, "SHOT-S3", f"Q_L processing M={M}, weight={M_weight}")
             y_lm = get_Ylm(L, M, Racah_normalized=True)
 
             rfield_delta_lm = rfield_shot * np.conj(y_lm(xgrid[0], xgrid[1], xgrid[2]))
             cfield_delta_lm = rfield_delta_lm.r2c()
-            cfield_delta_lm.apply(out=Ellipsis, func=compensation[0][1], kind=compensation[0][2])
+            cfield_delta_lm.apply(
+                out=Ellipsis, func=compensation[0][1], kind=compensation[0][2]
+            )
             cfield_delta_lm[:] *= boxsize.prod()
 
             term_field = cfield_delta_lm[:] * np.conj(cfield_N00[:])
@@ -1541,7 +1934,11 @@ def calculate_bk_sugi_survey(rfield_a, rfield_b, rfield_c, correlation_mode, \
                 Sbar_lm = S_LM_arr[M]
                 S_field = cfield_delta_lm.copy()
                 S_field[:] = Sbar_lm
-                S_field.apply(out=Ellipsis, func=compensation_shot_sugi[0][1], kind=compensation_shot_sugi[0][2])
+                S_field.apply(
+                    out=Ellipsis,
+                    func=compensation_shot_sugi[0][1],
+                    kind=compensation_shot_sugi[0][2],
+                )
                 term_field[:] -= S_field[:]
                 del S_field
 
@@ -1570,7 +1967,11 @@ def calculate_bk_sugi_survey(rfield_a, rfield_b, rfield_c, correlation_mode, \
         - full: all (i,j)
         """
         if tracer_type == "abb":
-            _log(1, "SHOT-S3", f"S3 forced to zero in mode={mode} because tracer_type=abb.")
+            _log(
+                1,
+                "SHOT-S3",
+                f"S3 forced to zero in mode={mode} because tracer_type=abb.",
+            )
             if mode == "full":
                 return np.zeros((k_bins, k_bins), dtype="complex128")
             return np.zeros(k_bins, dtype="complex128")
@@ -1584,10 +1985,9 @@ def calculate_bk_sugi_survey(rfield_a, rfield_b, rfield_c, correlation_mode, \
             if rank == 0:
                 for i in range(k_bins):
                     q_ells = get_q_ells(
-                        i, i, k_center, k_min, k_max, k_bins,
-                        ell_1, ell_2, L, k3_bins
+                        i, i, k_center, k_min, k_max, k_bins, ell_1, ell_2, L, k3_bins
                     )
-                    denom = np.sum(weighted_k_num[:2 * i + 1])
+                    denom = np.sum(weighted_k_num[: 2 * i + 1])
                     if denom > 0:
                         S3_local[i] = np.sum(q_ells * Q_like / k3_center) / denom
                 S3_local *= H_ells * N_ells
@@ -1598,17 +1998,29 @@ def calculate_bk_sugi_survey(rfield_a, rfield_b, rfield_c, correlation_mode, \
                 for i in range(k_bins):
                     for j in range(k_bins):
                         q_ells = get_q_ells(
-                            i, j, k_center, k_min, k_max, k_bins,
-                            ell_1, ell_2, L, k3_bins
+                            i,
+                            j,
+                            k_center,
+                            k_min,
+                            k_max,
+                            k_bins,
+                            ell_1,
+                            ell_2,
+                            L,
+                            k3_bins,
                         )
-                        valid_bins = get_valid_k3_bins(k_center[i], k_center[j], k_min, k_max, k_bins)
+                        valid_bins = get_valid_k3_bins(
+                            k_center[i], k_center[j], k_min, k_max, k_bins
+                        )
                         denom = np.sum(weighted_k_num * valid_bins)
                         if denom > 0:
                             S3_local[i, j] = np.sum(q_ells * Q_like / k3_center) / denom
                 S3_local *= H_ells * N_ells
             return comm.bcast(S3_local if rank == 0 else None, root=0)
         else:
-            raise ValueError("mode must be either 'diagonal' or 'full' for calculate_shot_noise_S3_like.")
+            raise ValueError(
+                "mode must be either 'diagonal' or 'full' for calculate_shot_noise_S3_like."
+            )
 
     if data_vector_mode == "diagonal":
         SN0 = 0.0 + 0.0j
@@ -1626,26 +2038,46 @@ def calculate_bk_sugi_survey(rfield_a, rfield_b, rfield_c, correlation_mode, \
                 rfield_shot = rfield_shot_b
                 N_field_shot = N_field_a
                 S_LM_shot = stat_attrs.get("S_LM_a", None)
-                _log(1, "SHOT", "active tracer branch: aab -> rfield_shot=rfield_b, N_field_shot=N_field_a, S_LM_shot=S_LM_a")
+                _log(
+                    1,
+                    "SHOT",
+                    "active tracer branch: aab -> rfield_shot=rfield_b, N_field_shot=N_field_a, S_LM_shot=S_LM_a",
+                )
             elif tracer_type == "abb":
                 rfield_shot = rfield_shot_a
                 N_field_shot = N_field_b
                 S_LM_shot = stat_attrs.get("S_LM_b", None)
-                _log(1, "SHOT", "active tracer branch: abb -> rfield_shot=rfield_a, N_field_shot=N_field_b, S_LM_shot=S_LM_b")
+                _log(
+                    1,
+                    "SHOT",
+                    "active tracer branch: abb -> rfield_shot=rfield_a, N_field_shot=N_field_b, S_LM_shot=S_LM_b",
+                )
             else:
                 rfield_shot = rfield_shot_a
                 N_field_shot = N_field_a
                 S_LM_shot = stat_attrs.get("S_LM_a", None)
-                _log(1, "SHOT", "active tracer branch: aaa/other -> rfield_shot=rfield_a, N_field_shot=N_field_a, S_LM_shot=S_LM_a")
+                _log(
+                    1,
+                    "SHOT",
+                    "active tracer branch: aaa/other -> rfield_shot=rfield_a, N_field_shot=N_field_a, S_LM_shot=S_LM_a",
+                )
 
             # S0: only for tracer_type=="aaa" and (ell1,ell2,L)==(0,0,0).
             if tracer_type == "aaa" and (ell_1 == 0 and ell_2 == 0 and L == 0):
                 S_LM_a = stat_attrs.get("S_LM_a", 0.0)
                 SN0 = S_LM_a[0] if isinstance(S_LM_a, np.ndarray) else S_LM_a
-                _log(1, "SHOT-S0", f"active: tracer_type=aaa and angu_config=(0,0,0), value={SN0}")
+                _log(
+                    1,
+                    "SHOT-S0",
+                    f"active: tracer_type=aaa and angu_config=(0,0,0), value={SN0}",
+                )
             else:
                 SN0 = 0.0 + 0.0j
-                _log(1, "SHOT-S0", "set_to_zero: requires tracer_type=aaa and angu_config=(0,0,0).")
+                _log(
+                    1,
+                    "SHOT-S0",
+                    "set_to_zero: requires tracer_type=aaa and angu_config=(0,0,0).",
+                )
 
             # S1: non-zero only for tracer_type in {"aaa","abb"} and ell_1 == L, ell_2 == 0.
             if (tracer_type in ["aaa", "abb"]) and (ell_1 == L and ell_2 == 0):
@@ -1653,15 +2085,27 @@ def calculate_bk_sugi_survey(rfield_a, rfield_b, rfield_c, correlation_mode, \
                 _log(1, "SHOT", "SN1 active.")
             else:
                 SN1 = np.zeros(k_bins, dtype="complex128")
-                _log(1, "SHOT", "SN1 set to 0 (requires tracer_type in {aaa,abb} and ell_1==L, ell_2==0).")
+                _log(
+                    1,
+                    "SHOT",
+                    "SN1 set to 0 (requires tracer_type in {aaa,abb} and ell_1==L, ell_2==0).",
+                )
 
             # S2: only for tracer_type=="aaa" and (0,0,0); then S2 = S1.
             if tracer_type == "aaa" and (ell_1 == 0 and ell_2 == 0 and L == 0):
                 SN2 = SN1.copy()
-                _log(1, "SHOT-S2", "active: reuse SN1 because tracer_type=aaa and angu_config=(0,0,0).")
+                _log(
+                    1,
+                    "SHOT-S2",
+                    "active: reuse SN1 because tracer_type=aaa and angu_config=(0,0,0).",
+                )
             else:
                 SN2 = np.zeros(k_bins, dtype="complex128")
-                _log(1, "SHOT-S2", "set_to_zero: requires tracer_type=aaa and angu_config=(0,0,0).")
+                _log(
+                    1,
+                    "SHOT-S2",
+                    "set_to_zero: requires tracer_type=aaa and angu_config=(0,0,0).",
+                )
 
             # S3: zero for tracer_type=="abb"; otherwise keep dedicated branch.
             if tracer_type != "abb":
@@ -1687,34 +2131,60 @@ def calculate_bk_sugi_survey(rfield_a, rfield_b, rfield_c, correlation_mode, \
                 rfield_shot = rfield_shot_b
                 N_field_shot = N_field_a
                 S_LM_shot = stat_attrs.get("S_LM_a", None)
-                _log(1, "SHOT", "full mode branch: aab -> rfield_shot=rfield_b, N_field_shot=N_field_a, S_LM_shot=S_LM_a")
+                _log(
+                    1,
+                    "SHOT",
+                    "full mode branch: aab -> rfield_shot=rfield_b, N_field_shot=N_field_a, S_LM_shot=S_LM_a",
+                )
             elif tracer_type == "abb":
                 rfield_shot = rfield_shot_a
                 N_field_shot = N_field_b
                 S_LM_shot = stat_attrs.get("S_LM_b", None)
-                _log(1, "SHOT", "full mode branch: abb -> rfield_shot=rfield_a, N_field_shot=N_field_b, S_LM_shot=S_LM_b")
+                _log(
+                    1,
+                    "SHOT",
+                    "full mode branch: abb -> rfield_shot=rfield_a, N_field_shot=N_field_b, S_LM_shot=S_LM_b",
+                )
             else:
                 rfield_shot = rfield_shot_a
                 N_field_shot = N_field_a
                 S_LM_shot = stat_attrs.get("S_LM_a", None)
-                _log(1, "SHOT", "full mode branch: aaa/other -> rfield_shot=rfield_a, N_field_shot=N_field_a, S_LM_shot=S_LM_a")
+                _log(
+                    1,
+                    "SHOT",
+                    "full mode branch: aaa/other -> rfield_shot=rfield_a, N_field_shot=N_field_a, S_LM_shot=S_LM_a",
+                )
 
             # S0: only for tracer_type=="aaa" and (ell1,ell2,L)==(0,0,0).
             if tracer_type == "aaa" and (ell_1 == 0 and ell_2 == 0 and L == 0):
                 S_LM_a = stat_attrs.get("S_LM_a", 0.0)
                 SN0 = S_LM_a[0] if isinstance(S_LM_a, np.ndarray) else S_LM_a
-                _log(1, "SHOT-S0", f"full_mode active: tracer_type=aaa and angu_config=(0,0,0), value={SN0}")
+                _log(
+                    1,
+                    "SHOT-S0",
+                    f"full_mode active: tracer_type=aaa and angu_config=(0,0,0), value={SN0}",
+                )
             else:
                 SN0 = 0.0 + 0.0j
-                _log(1, "SHOT-S0", "full_mode set_to_zero: requires tracer_type=aaa and angu_config=(0,0,0).")
+                _log(
+                    1,
+                    "SHOT-S0",
+                    "full_mode set_to_zero: requires tracer_type=aaa and angu_config=(0,0,0).",
+                )
 
             # S1 vector then expand to full (same style as box implementation).
             if (tracer_type in ["aaa", "abb"]) and (ell_1 == L and ell_2 == 0):
-                SN1_vec = calculate_shot_noise_S1_like(rfield_shot, N_field_shot, S_LM_shot)
+                SN1_vec = calculate_shot_noise_S1_like(
+                    rfield_shot, N_field_shot, S_LM_shot
+                )
                 _log(1, "SHOT", "full mode SN1 active (from 1D S1-like).")
             else:
                 SN1_vec = np.zeros(k_bins, dtype="complex128")
-                _log(1, "SHOT", "full mode SN1 set to 0 (requires tracer_type in {aaa,abb} and ell_1==L, ell_2==0).")
+                _log(
+                    1,
+                    "SHOT",
+                    "full mode SN1 set to 0 (requires tracer_type in {aaa,abb} and ell_1==L, ell_2==0).",
+                )
 
             for i in range(k_bins):
                 SN1[i, :] = SN1_vec[i]
@@ -1722,10 +2192,18 @@ def calculate_bk_sugi_survey(rfield_a, rfield_b, rfield_c, correlation_mode, \
             # S2 vector then expand to full (same style as box implementation).
             if tracer_type == "aaa" and (ell_1 == 0 and ell_2 == 0 and L == 0):
                 SN2_vec = SN1_vec.copy()
-                _log(1, "SHOT-S2", "full_mode active: reuse SN1_vec because tracer_type=aaa and angu_config=(0,0,0).")
+                _log(
+                    1,
+                    "SHOT-S2",
+                    "full_mode active: reuse SN1_vec because tracer_type=aaa and angu_config=(0,0,0).",
+                )
             else:
                 SN2_vec = np.zeros(k_bins, dtype="complex128")
-                _log(1, "SHOT-S2", "full_mode set_to_zero: requires tracer_type=aaa and angu_config=(0,0,0).")
+                _log(
+                    1,
+                    "SHOT-S2",
+                    "full_mode set_to_zero: requires tracer_type=aaa and angu_config=(0,0,0).",
+                )
 
             for i in range(k_bins):
                 SN2[:, i] = SN2_vec[i]
@@ -1740,7 +2218,9 @@ def calculate_bk_sugi_survey(rfield_a, rfield_b, rfield_c, correlation_mode, \
                 _log(1, "SHOT", "full mode SN3 set to 0 because tracer_type=abb.")
     time_shotnoise_end = time.time()
     if rank == 0:
-        logging.info(f"Rank {rank}: Time to compute shot noise terms: {time_shotnoise_end - time_shotnoise_start:.2f} seconds")
+        logging.info(
+            f"Rank {rank}: Time to compute shot noise terms: {time_shotnoise_end - time_shotnoise_start:.2f} seconds"
+        )
     if rank == 0:
         # Signal normalization (no shot-noise subtraction at this stage).
         total_res *= N_ells * H_ells / I_norm
@@ -1748,22 +2228,29 @@ def calculate_bk_sugi_survey(rfield_a, rfield_b, rfield_c, correlation_mode, \
             total_res *= 1.0 / np.outer(k_num, k_num)
             sn_shape = (k_bins, k_bins)
         else:
-            total_res *= 1.0 / (k_num ** 2)
+            total_res *= 1.0 / (k_num**2)
             sn_shape = (k_bins,)
         total_res *= vol_per_cell
 
         total_shot_noise = (SN0 + SN1 + SN2 + SN3) / I_norm
         final_bk = total_res - total_shot_noise
 
-        results.update({
-            "B_sugi": final_bk,
-            "Bk_raw": total_res,
-            "SN_terms": {"SN0": SN0/I_norm, "SN1": SN1/I_norm, "SN2": SN2/I_norm, "SN3": SN3/I_norm},
-            "Shot_noise": total_shot_noise,
-            "I_norm": I_norm,
-            "k_eff": k_eff,
-            "nmodes": k_num,
-        })
+        results.update(
+            {
+                "B_sugi": final_bk,
+                "Bk_raw": total_res,
+                "SN_terms": {
+                    "SN0": SN0 / I_norm,
+                    "SN1": SN1 / I_norm,
+                    "SN2": SN2 / I_norm,
+                    "SN3": SN3 / I_norm,
+                },
+                "Shot_noise": total_shot_noise,
+                "I_norm": I_norm,
+                "k_eff": k_eff,
+                "nmodes": k_num,
+            }
+        )
 
     # Keep N_field/rfield construction in this stage, but do not serialize mesh objects.
     del rfield_shot_a, rfield_shot_b, rfield_shot_c
@@ -1772,11 +2259,13 @@ def calculate_bk_sugi_survey(rfield_a, rfield_b, rfield_c, correlation_mode, \
 
     results = comm.bcast(results, root=0)
     if rank == 0:
-        logging.info(f"Rank {rank}: Finished survey bispectrum (signal-only) calculation.")
+        logging.info(
+            f"Rank {rank}: Finished survey bispectrum (signal-only) calculation."
+        )
     return results
 
 
-def get_G_ell(rfield, ell, kgrid, xgrid,compensation,boxsize,comm):
+def get_G_ell(rfield, ell, kgrid, xgrid, compensation, boxsize, comm):
     r"""
     Calculate the G_ell function for the given ell.
     This function is a placeholder and should be replaced with the actual implementation.
@@ -1787,8 +2276,8 @@ def get_G_ell(rfield, ell, kgrid, xgrid,compensation,boxsize,comm):
 
     Ylms = [get_Ylm(ell, m) for m in range(ell + 1)]
     rf = rfield * Ylms[0](xgrid[0], xgrid[1], xgrid[2])
-    G_ell = rf.r2c() 
-    G_ell[:] *= Ylms[0](kgrid[0], kgrid[1], kgrid[2])/2
+    G_ell = rf.r2c()
+    G_ell[:] *= Ylms[0](kgrid[0], kgrid[1], kgrid[2]) / 2
 
     for m in range(1, ell + 1):
         rf = rfield * np.conj(Ylms[m](xgrid[0], xgrid[1], xgrid[2]))
@@ -1802,110 +2291,127 @@ def get_G_ell(rfield, ell, kgrid, xgrid,compensation,boxsize,comm):
 
     G_ell.apply(out=Ellipsis, func=compensation[0][1], kind=compensation[0][2])
     if rank == 0:
-        logging.info(f"{compensation[0][1].__name__} applied to G_ell")
+        logging.info(f"Rank {rank}: {compensation[0][1].__name__} applied to G_ell")
         # print(f"rank {rank}: type of G_ell = {type(G_ell)}")
-    G_ell[:] *= 4*np.pi*boxsize.prod() / (2*ell + 1)
+    G_ell[:] *= 4 * np.pi * boxsize.prod() / (2 * ell + 1)
 
     return G_ell
 
 
 def validate_tracer(tracer_type, correlation_mode):
-    assert correlation_mode in ["auto", "cross"], "correlation_mode must be either 'auto' or 'cross'"
-    assert tracer_type in ["aaa", "aab", "abb", "abc"], "tracer_type must be one of 'aaa', 'aab', 'abb', or 'abc'"
+    assert correlation_mode in [
+        "auto",
+        "cross",
+    ], "correlation_mode must be either 'auto' or 'cross'"
+    assert tracer_type in [
+        "aaa",
+        "aab",
+        "abb",
+        "abc",
+    ], "tracer_type must be one of 'aaa', 'aab', 'abb', or 'abc'"
     if correlation_mode == "auto":
         assert tracer_type == "aaa", "For auto-correlation, tracer_type must be 'aaa'"
 
 
 def validate_poles(poles):
     """
-        Validate the poles input.
-        Raise ValueError if the input is not valid.
-        1. All elements must be non-negative integers.
-        2. No duplicate values.
-        3. If more than one value, they must be sorted in ascending order.
+    Validate the poles input.
+    Raise ValueError if the input is not valid.
+    1. All elements must be non-negative integers.
+    2. No duplicate values.
+    3. If more than one value, they must be sorted in ascending order.
     """
     if not all(isinstance(p, int) and p >= 0 for p in poles):
         raise ValueError("All elements in 'poles' must be non-negative integers.")
     if len(poles) != len(set(poles)):
         raise ValueError("'poles' contains duplicate values.")
     if len(poles) > 1 and poles != sorted(poles):
-        raise ValueError("'poles' must be sorted in ascending order if it contains more than one value.")
-    
+        raise ValueError(
+            "'poles' must be sorted in ascending order if it contains more than one value."
+        )
 
-def validate_sugi_poles(angu_config, geometry):    
+
+def validate_sugi_poles(angu_config, geometry):
     """
-        Validate the angu_config input for Sugiyama bispectrum estimator.
-        Raise ValueError if the input is not valid.
-        1. All ell elements must satisfy quantum angular number conditions.
-        2. ell1 >= ell2 
-        3. The sum of the three ell elements must be even.
+    Validate the angu_config input for Sugiyama bispectrum estimator.
+    Raise ValueError if the input is not valid.
+    1. All ell elements must satisfy quantum angular number conditions.
+    2. ell1 >= ell2
+    3. The sum of the three ell elements must be even.
     """
     ell1, ell2, L = angu_config
     if ell1 < ell2:
-        raise ValueError("In 'angu_config', ell1 must be greater than or equal to ell2.")
+        raise ValueError(
+            "In 'angu_config', ell1 must be greater than or equal to ell2."
+        )
     if (ell1 + ell2 + L) % 2 != 0:
         raise ValueError("The sum of ell1, ell2, and L in 'angu_config' must be even.")
-    if  L % 2 != 0:
+    if L % 2 != 0:
         raise ValueError("L must be even.")
     # Triangle condition
     if not (ell1 - ell2 <= L <= ell1 + ell2):
-        raise ValueError("The values in 'angu_config' do not satisfy the triangle condition.")
+        raise ValueError(
+            "The values in 'angu_config' do not satisfy the triangle condition."
+        )
     if geometry not in ["box-like", "survey-like"]:
         raise ValueError("geometry must be either 'box-like' or 'survey-like'.")
-
-
-
 
 
 """
 Taken from nbodykit.algorithms.convpower.catalogmesh
 see Jing et al 2005 <https://arxiv.org/abs/astro-ph/0409240> for details
 """
+
+
 def get_compensation(interlaced, sampler):
     """
     Return the compensation function, which corrects for the
     windowing kernel.
     """
     if interlaced:
-        d = {'cic' : CompensateCIC,
-             'tsc' : CompensateTSC,
-             'pcs' : CompensatePCS,
-             'ngp' : CompensateNGP,
-            }
+        d = {
+            "cic": CompensateCIC,
+            "tsc": CompensateTSC,
+            "pcs": CompensatePCS,
+            "ngp": CompensateNGP,
+        }
     else:
-        d = {'cic' : CompensateCICShotnoise,
-             'tsc' : CompensateTSCShotnoise,
-             'pcs' : CompensatePCSShotnoise,
-             'ngp' : CompensateNGPShotnoise,
-            }
+        d = {
+            "cic": CompensateCICShotnoise,
+            "tsc": CompensateTSCShotnoise,
+            "pcs": CompensatePCSShotnoise,
+            "ngp": CompensateNGPShotnoise,
+        }
 
     if not sampler in d:
         raise ValueError("compensation for window %s is not defined" % sampler)
     filter = d[sampler]
-    return [('complex', filter, "circular")]
+    return [("complex", filter, "circular")]
 
 
 def get_compensation_bk_sugi(sampler):
-    d = {'cic' : CompensateCIC,
-        'tsc' : CompensateTSC,
-        'pcs' : CompensatePCS,
-        'ngp' : CompensateNGP,
-        }        
+    d = {
+        "cic": CompensateCIC,
+        "tsc": CompensateTSC,
+        "pcs": CompensatePCS,
+        "ngp": CompensateNGP,
+    }
     if not sampler in d:
         raise ValueError("compensation for window %s is not defined" % sampler)
     filter = d[sampler]
-    return [('complex', filter, "circular")]
+    return [("complex", filter, "circular")]
 
 
 def get_compensation_shot_sugi(sampler):
-    d = {'cic' : Compensate_bk_noise_cic,
-        'tsc' : Compensate_bk_noise_tsc,
-        'pcs' : Compensate_bk_noise_pcs,
-        'ngp' : Compensate_bk_noise_ngp,
-        }
-    
+    d = {
+        "cic": Compensate_bk_noise_cic,
+        "tsc": Compensate_bk_noise_tsc,
+        "pcs": Compensate_bk_noise_pcs,
+        "ngp": Compensate_bk_noise_ngp,
+    }
+
     if not sampler in d:
         raise ValueError("compensation for window %s is not defined" % sampler)
-    
+
     filter = d[sampler]
-    return [('complex', filter, "circular")]
+    return [("complex", filter, "circular")]
