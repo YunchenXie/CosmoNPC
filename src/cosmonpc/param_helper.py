@@ -88,8 +88,11 @@ def validate_boolean_fields(config):
 
 
 def validate_config(config):
-    if "shotnoise-mode" in config and "shotnoise_mode" not in config:
-        config["shotnoise_mode"] = config.pop("shotnoise-mode")
+    if config.get("statistic") == "bk_sugi":
+        if "shotnoise-mode" in config and "shotnoise_mode" not in config:
+            config["shotnoise_mode"] = config.pop("shotnoise-mode")
+    else:
+        config.pop("shotnoise-mode", None)
 
     if "high_order_mode" not in config:
         if "use_fast_mode" in config:
@@ -108,9 +111,12 @@ def validate_config(config):
     Cubic_Check(config["nmesh"], "nmesh", int)
     Cubic_Check(config["boxsize"], "boxsize", (float, int))
 
-    shotnoise_mode = config.setdefault("shotnoise_mode", "ana")
-    if shotnoise_mode not in ["ana", "fft", "both"]:
-        raise ValueError("shotnoise_mode must be either 'ana', 'fft', or 'both'")
+    if config.get("statistic") == "bk_sugi":
+        shotnoise_mode = config.setdefault("shotnoise_mode", "ana")
+        if shotnoise_mode not in ["ana", "fft", "both"]:
+            raise ValueError("shotnoise_mode must be either 'ana', 'fft', or 'both'")
+    else:
+        config.pop("shotnoise_mode", None)
 
     high_order_mode = config["high_order_mode"]
     if high_order_mode not in ["default", "fast", "compare"]:

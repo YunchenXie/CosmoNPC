@@ -52,7 +52,7 @@ CONFIG = {
     # poles: Multipole orders
     "poles": [0, 2],
     # compensation: Mesh compensation
-    "compensation": True,
+    # "compensation": True,
     # normalization_scheme: Pk normalization, particle or mixed-mesh
     "normalization_scheme": "particle",
     # Para_cosmo (for .npy/box-like catalogs, cosmology parameters not used)

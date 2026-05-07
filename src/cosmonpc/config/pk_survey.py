@@ -48,7 +48,7 @@ CONFIG = {
     # poles: Multipole orders
     "poles": [0, 2, 4, 6 ],
     # compensation: Mesh compensation
-    "compensation": True,
+    # "compensation": True,
     # normalization_scheme: Pk normalization
     "normalization_scheme": "particle",  # "particle" or "mixed-mesh"
     # alpha_scheme: how to compute alpha (pypower or nbodykit)
