@@ -257,6 +257,13 @@ def get_mesh_pk_survey(
     boxsize = np.array(boxsize)
     boxcenter = None
 
+    catalog_bounds = {}
+
+    def _store_catalog_bounds(catalog_name, catalog_data):
+        bounds = get_position_bounds(catalog_data["Position"], comm)
+        check_bounds_in_box(bounds, boxcenter, boxsize, catalog_name, comm)
+        catalog_bounds[catalog_name] = bounds
+
     # Load data and random catalogs
     # firstly we use randoms_a to determine the boxcenter
     randoms_a, boxcenter = catalog_reader(
@@ -271,6 +278,8 @@ def get_mesh_pk_survey(
         catalog_type="randoms",
         normalization_scheme=normalization_scheme,
     )
+
+    _store_catalog_bounds("randoms_a", randoms_a)
 
     mesh_attrs.update({"boxcenter": boxcenter})
 
@@ -287,6 +296,7 @@ def get_mesh_pk_survey(
         catalog_type="data",
         normalization_scheme=normalization_scheme,
     )
+    _store_catalog_bounds("data_a", data_a)
 
     # obtain some necessary sums for alpha, particle-normalization and shot noise calculation
     particle_sums_a = compute_particle_sums_pk(
@@ -407,6 +417,8 @@ def get_mesh_pk_survey(
             catalog_type="randoms",
             normalization_scheme=normalization_scheme,
         )
+        _store_catalog_bounds("data_b", data_b)
+        _store_catalog_bounds("randoms_b", randoms_b)
 
         # obtain some necessary sums for alpha, particle-normalization and shot noise calculation
         particle_sums_b = compute_particle_sums_pk(
@@ -527,6 +539,8 @@ def get_mesh_pk_survey(
             )
 
     # broadcast updated mesh_attrs to all ranks
+    mesh_attrs["catalog_bounds"] = catalog_bounds
+    mesh_attrs["combined_bounds"] = combine_position_bounds(catalog_bounds)
     mesh_attrs = comm.bcast(mesh_attrs, root=0)
 
     # Memory cleanup
@@ -589,6 +603,12 @@ def get_mesh_bk_survey(
     mesh_attrs = {"normalization_scheme": normalization_scheme}
     boxcenter = None
     tracer_cache = {}
+    catalog_bounds = {}
+
+    def _store_catalog_bounds(catalog_name, catalog_data):
+        bounds = get_position_bounds(catalog_data["Position"], comm)
+        check_bounds_in_box(bounds, boxcenter, boxsize, catalog_name, comm)
+        catalog_bounds[catalog_name] = bounds
 
     def _prepare_tracer(
         label, data_key, random_key, keep_data_mesh=False, keep_randoms_mesh=False
@@ -625,6 +645,8 @@ def get_mesh_bk_survey(
             catalog_type="data",
             normalization_scheme=normalization_scheme,
         )
+        _store_catalog_bounds(random_key, randoms)
+        _store_catalog_bounds(data_key, data)
 
         sums_bk = compute_particle_sums_bk(
             data, randoms, correlation_mode, angu_config, comm
@@ -714,6 +736,7 @@ def get_mesh_bk_survey(
         catalog_type="randoms",
         normalization_scheme=normalization_scheme,
     )
+    _store_catalog_bounds("randoms_a", randoms_a_preview)
     del randoms_a_preview
     gc.collect()
 
@@ -997,6 +1020,8 @@ def get_mesh_bk_survey(
             if rank == 0:
                 mesh_attrs["I_norm"] = I_mesh
 
+    mesh_attrs["catalog_bounds"] = catalog_bounds
+    mesh_attrs["combined_bounds"] = combine_position_bounds(catalog_bounds)
     mesh_attrs = comm.bcast(mesh_attrs, root=0)
     # if rank == 0:
     #     print("Mesh attributes:", mesh_attrs)

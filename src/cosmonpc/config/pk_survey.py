@@ -46,7 +46,7 @@ CONFIG = {
     # k_bins: k-space bins
     "k_bins": 30,
     # poles: Multipole orders
-    "poles": [0, 2, 4, 6 ],
+    "poles": [0, 2,],
     # compensation: Mesh compensation
     # "compensation": True,
     # normalization_scheme: Pk normalization
@@ -58,7 +58,7 @@ CONFIG = {
     # "fast": [0,2,4] -> P4b; [0,2,4,6] -> P4 + P6b; [0,2,4,6,8] -> P4 + P6b + P8b
     # "compare": [0,2,4] -> P4 + P4b; [0,2,4,6] -> P4 + P6 + P4b + P6b;
     #            [0,2,4,6,8] -> P4 + P6 + P8 + P4b + P6b + P8b
-    "high_order_mode": "compare",
+    "high_order_mode": "default",
     # Para_cosmo (for .npy/box-like catalogs, cosmology parameters not used)
     "cosmology": {
         "h": 0.676,  # Hubble parameter

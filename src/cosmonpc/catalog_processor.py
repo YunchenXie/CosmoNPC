@@ -290,6 +290,108 @@ def add_completeness_weight(dr, comp_weight_plan, catalog_type, comm):
     return dr
 
 
+def get_position_bounds(position, comm):
+    """
+    Return catalog coordinate bounds for a position array distributed over MPI ranks.
+    """
+    rank = comm.Get_rank()
+    size = comm.Get_size()
+    local_count = len(position)
+    total_count = comm.allreduce(local_count, op=MPI.SUM)
+    if total_count == 0:
+        raise ValueError("Cannot determine position bounds from an empty catalog.")
+
+    has_empty_rank = int(local_count == 0)
+    empty_rank_count = comm.allreduce(has_empty_rank, op=MPI.SUM)
+    if empty_rank_count > 0 and rank == 0:
+        empty_flags = comm.allgather(has_empty_rank)
+        empty_ranks = [idx for idx, flag in enumerate(empty_flags) if flag]
+        logging.info(
+            "Detected empty rank(s) after catalog filtering: "
+            f"empty_ranks={empty_ranks}, "
+            f"empty_rank_count={empty_rank_count}/{size}, "
+            f"total_objects={total_count}. "
+            "This is allowed, but may indicate that catalog rows are not well mixed "
+            "for the chosen cut."
+        )
+    elif empty_rank_count > 0:
+        comm.allgather(has_empty_rank)
+
+    if local_count > 0:
+        local_min = np.min(position, axis=0)
+        local_max = np.max(position, axis=0)
+    else:
+        local_min = np.full(3, np.inf)
+        local_max = np.full(3, -np.inf)
+
+    global_min = np.empty(3)
+    global_max = np.empty(3)
+    comm.Allreduce(local_min, global_min, op=MPI.MIN)
+    comm.Allreduce(local_max, global_max, op=MPI.MAX)
+
+    return {
+        "catalog_min": global_min,
+        "catalog_max": global_max,
+        "catalog_extent": global_max - global_min,
+        "N_objects": total_count,
+    }
+
+
+def combine_position_bounds(catalog_bounds):
+    """
+    Combine per-catalog coordinate bounds into one overall bound.
+    """
+    global_min = np.min(
+        [bounds["catalog_min"] for bounds in catalog_bounds.values()], axis=0
+    )
+    global_max = np.max(
+        [bounds["catalog_max"] for bounds in catalog_bounds.values()], axis=0
+    )
+    total_count = sum(bounds["N_objects"] for bounds in catalog_bounds.values())
+
+    return {
+        "global_min": global_min,
+        "global_max": global_max,
+        "global_extent": global_max - global_min,
+        "N_objects": total_count,
+    }
+
+
+def check_bounds_in_box(bounds, boxcenter, boxsize, catalog_name, comm, rtol=1e-8):
+    """
+    Raise if catalog bounds are not contained in the mesh box.
+    """
+    rank = comm.Get_rank()
+    boxcenter = np.asarray(boxcenter)
+    boxsize = np.asarray(boxsize)
+    box_min = boxcenter - 0.5 * boxsize
+    box_max = boxcenter + 0.5 * boxsize
+    tol = rtol * np.max(boxsize)
+
+    below = bounds["catalog_min"] < box_min - tol
+    above = bounds["catalog_max"] > box_max + tol
+    if np.any(below) or np.any(above):
+        err_msg = (
+            f"Catalog {catalog_name} exceeds the mesh box: "
+            f"catalog_min={bounds['catalog_min']}, "
+            f"catalog_max={bounds['catalog_max']}, "
+            f"catalog_extent={bounds['catalog_extent']}, "
+            f"N_objects={bounds['N_objects']}, "
+            f"mesh_min={box_min}, mesh_max={box_max}, "
+            f"boxcenter={boxcenter}, boxsize={boxsize}"
+        )
+        if rank == 0:
+            logging.error(err_msg)
+        raise ValueError(err_msg)
+
+    if rank == 0:
+        logging.info(
+            f"Catalog {catalog_name} bounds checked: "
+            f"catalog_min={bounds['catalog_min']}, "
+            f"catalog_max={bounds['catalog_max']}"
+        )
+
+
 def catalog_reader(
     catalog,
     geometry,
@@ -563,13 +665,8 @@ def catalog_reader(
 
             # find the boxcenter in all ranks if not provided
             if boxcenter is None:
-                local_min = np.min(data_cat["Position"], axis=0)
-                local_max = np.max(data_cat["Position"], axis=0)
-                global_min = np.empty(3)
-                global_max = np.empty(3)
-                comm.Allreduce(local_min, global_min, op=MPI.MIN)
-                comm.Allreduce(local_max, global_max, op=MPI.MAX)
-                boxcenter = 0.5 * (global_min + global_max)
+                bounds = get_position_bounds(data_cat["Position"], comm)
+                boxcenter = 0.5 * (bounds["catalog_min"] + bounds["catalog_max"])
                 if rank == 0:
                     logging.info(f"Calculated boxcenter: {boxcenter}")
             else:
