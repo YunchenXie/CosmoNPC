@@ -1,4 +1,69 @@
+"""Helpers for validating run configs, catalog inputs, and catalog metadata."""
+
+import os
 import numpy as np
+
+
+def is_memory_catalog(catalog):
+    """Return True for an in-memory catalog array or catalog object."""
+    if isinstance(catalog, np.ndarray) and catalog.dtype.names is not None:
+        return True
+    return isinstance(catalog, dict) and "array" in catalog
+
+
+def get_catalog_array(catalog):
+    if isinstance(catalog, dict) and "array" in catalog:
+        return catalog["array"]
+    return catalog
+
+
+def validate_memory_catalog(catalog, geometry=None):
+    arr = get_catalog_array(catalog)
+    if not isinstance(arr, np.ndarray) or arr.dtype.names is None:
+        raise TypeError(
+            "In-memory catalog must be a structured numpy.ndarray or a dict "
+            "with an 'array' structured numpy.ndarray."
+        )
+
+    required = ["Position", "WEIGHT"]
+    if geometry == "survey-like":
+        required.extend(["WEIGHT_FKP", "NZ"])
+
+    missing = [field for field in required if field not in arr.dtype.names]
+    if missing:
+        raise ValueError(f"In-memory catalog is missing fields: {missing}")
+
+    if arr["Position"].ndim != 2 or arr["Position"].shape[1] != 3:
+        raise ValueError("In-memory catalog field 'Position' must have shape (N, 3).")
+
+    return arr
+
+
+def get_catalog_name(catalog, default):
+    if isinstance(catalog, dict):
+        if catalog.get("name"):
+            return str(catalog["name"])
+        metadata = catalog.get("metadata") or {}
+        if metadata.get("name"):
+            return str(metadata["name"])
+
+    if isinstance(catalog, (str, os.PathLike)):
+        return os.path.splitext(os.path.basename(catalog))[0]
+
+    return default
+
+
+def get_catalog_parent_name(catalog, default="memory_catalog"):
+    if isinstance(catalog, dict):
+        metadata = catalog.get("metadata") or {}
+        if metadata.get("parent_name"):
+            return str(metadata["parent_name"])
+
+    if isinstance(catalog, (str, os.PathLike)):
+        parent = os.path.basename(os.path.dirname(catalog))
+        return parent or default
+
+    return default
 
 
 def validate_tracer(tracer_type, correlation_mode):
@@ -169,3 +234,7 @@ def catalog_check(catalogs, geometry, correlation_mode, statistic, tracer_type=N
             assert (
                 catalogs.get("randoms_c") is not None
             ), "randoms_c catalog must be provided for tracer_type 'abc' in survey-like bispectrum"
+
+    for catalog in catalogs.values():
+        if catalog is not None and is_memory_catalog(catalog):
+            validate_memory_catalog(catalog, geometry=geometry)

@@ -5,7 +5,12 @@ import numpy as np
 from mpi4py import MPI
 from .mesh_generator import *
 from .clustering_estimator import *
-from .param_helper import validate_config, catalog_check
+from .param_helper import (
+    catalog_check,
+    get_catalog_name,
+    get_catalog_parent_name,
+    validate_config,
+)
 
 
 def run_task(statistic, correlation_mode, geometry, catalogs, **kwargs):
@@ -127,11 +132,9 @@ def run_task(statistic, correlation_mode, geometry, catalogs, **kwargs):
             logging.info(f"Power spectrum result: {pk_res}")
             # save the result to a file
             output_dir = kwargs.get("output_dir")
-            catalog_name_a = os.path.splitext(os.path.basename(catalogs["data_a"]))[0]
+            catalog_name_a = get_catalog_name(catalogs["data_a"], "data_a")
             if correlation_mode == "cross":
-                catalog_name_b = os.path.splitext(os.path.basename(catalogs["data_b"]))[
-                    0
-                ]
+                catalog_name_b = get_catalog_name(catalogs["data_b"], "data_b")
             if not os.path.exists(output_dir):
                 os.makedirs(output_dir)
             if correlation_mode == "auto":
@@ -302,8 +305,8 @@ def run_task(statistic, correlation_mode, geometry, catalogs, **kwargs):
             if not os.path.exists(output_dir):
                 os.makedirs(output_dir)
 
-            catalog_name_a = os.path.splitext(os.path.basename(catalogs["data_a"]))[0]
-            parent_dir = os.path.basename(os.path.dirname(catalogs["data_a"]))
+            catalog_name_a = get_catalog_name(catalogs["data_a"], "data_a")
+            parent_dir = get_catalog_parent_name(catalogs["data_a"])
             # sometimes we need parent dir to distinguish different catalogs, especially when the catalog name is the same but they are from different directories
             if kwargs.get("use_parent_dir", True): 
                 catalog_name_a = parent_dir + "_" + catalog_name_a

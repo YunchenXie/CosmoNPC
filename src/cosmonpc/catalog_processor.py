@@ -12,6 +12,8 @@ import warnings
 import gc
 import fitsio
 
+from .param_helper import get_catalog_name, is_memory_catalog, validate_memory_catalog
+
 
 def h5_reader(comm, files, column_names):
     """
@@ -411,7 +413,8 @@ def catalog_reader(
     """
     Reads the data/randoms catalog and applies necessary preprocessing steps.
     Args:
-        catalog (str or list): Path(s) to the catalog file(s).
+        catalog (str, list, numpy.ndarray, or dict): Path(s) to catalog file(s),
+            an in-memory structured array, or a catalog object with an "array" key.
         geometry (str): The geometry type ("box-like" or "survey-like").
         column_names (list): List of column names for position and weight which only works in some cases.
         z_range (tuple): The redshift range to filter the data and randoms.
@@ -430,6 +433,28 @@ def catalog_reader(
     # Initialize MPI
     rank = comm.Get_rank()
     size = comm.Get_size()
+
+    if is_memory_catalog(catalog):
+        if rank == 0:
+            logging.info(
+                f"{'*' * 80}\nStart to read in-memory catalog: "
+                f"{get_catalog_name(catalog, '<unnamed>')}"
+            )
+        data_cat = validate_memory_catalog(catalog, geometry=geometry)
+        if rank == 0:
+            logging.info(
+                "Using in-memory catalog with fields "
+                f"{list(data_cat.dtype.names)} and {len(data_cat)} local rows."
+            )
+        if boxcenter is None:
+            bounds = get_position_bounds(data_cat["Position"], comm)
+            boxcenter = 0.5 * (bounds["catalog_min"] + bounds["catalog_max"])
+            if rank == 0:
+                logging.info(f"Calculated boxcenter: {boxcenter}")
+            return data_cat, boxcenter
+        if rank == 0:
+            logging.info(f"Using provided boxcenter: {boxcenter}")
+        return data_cat
 
     if rank == 0:
         logging.info(f"{'*' * 80}\nStart to read catalog: {catalog}")
