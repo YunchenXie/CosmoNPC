@@ -60,8 +60,8 @@ CONFIG = {
     ],  # for bk_sugi, this parameter indicates one single angular momenta configuration l_1,l_2,L
     # compensation: Mesh compensation
     # "compensation": True,
-    "data_vector_mode": "full",  # "diagonal" or "full"
-    "shotnoise_mode": "both",  # "ana", "fft", or "both" for the S3 shot-noise branch
+    "data_vector_mode": "diagonal",  # "diagonal" or "full"
+    "shotnoise_mode": "ana",  # "ana", "fft", or "both" for the S3 shot-noise branch
     "block_size": "full",  # 1,"full" or an integer between 1 and k_bins
     # (only for bk_sugi with data_vector_mode="full")
     # normalization_scheme: bk normalization, particle, mesh or mixed-mesh

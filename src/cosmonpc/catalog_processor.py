@@ -446,6 +446,8 @@ def catalog_reader(
                 "Using in-memory catalog with fields "
                 f"{list(data_cat.dtype.names)} and {len(data_cat)} local rows."
             )
+        if geometry == "box-like":
+            return data_cat
         if boxcenter is None:
             bounds = get_position_bounds(data_cat["Position"], comm)
             boxcenter = 0.5 * (bounds["catalog_min"] + bounds["catalog_max"])
