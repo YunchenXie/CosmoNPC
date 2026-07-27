@@ -1,6 +1,5 @@
 import os
 import gc
-import yaml
 import numpy as np
 from mpi4py import MPI
 from .mesh_generator import *

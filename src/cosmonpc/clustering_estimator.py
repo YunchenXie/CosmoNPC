@@ -768,7 +768,7 @@ def calculate_bk_sugi_box(
     )
     sampler = stat_attrs["sampler"]
     interlaced = stat_attrs["interlaced"]
-    tracer_type = stat_attrs["tracer_type"]  # "aaa", "aab", "abb" or "abc"
+    tracer_type = stat_attrs["tracer_type"]  # "aaa", "aab", "aba", "abb" or "abc"
     vol_per_cell = boxsize.prod() / nmesh.prod()
 
     # constants related to angular momenta
@@ -841,13 +841,12 @@ def calculate_bk_sugi_box(
     if rank == 0:
         logging.info(f"Rank {rank}: kgrid and knorm obtained.")
 
-    if correlation_mode == "auto":
+    if correlation_mode == "auto" or tracer_type == "aba":
         G_00 = cfield_a.c2r()
+    elif tracer_type == "abc":
+        G_00 = cfield_c.c2r()
     else:
-        if tracer_type == "abc":
-            G_00 = cfield_c.c2r()
-        else:
-            G_00 = cfield_b.c2r()
+        G_00 = cfield_b.c2r()
     G_00 = np.real(G_00)  # G_00 is strictly to be real
     if rank == 0:
         logging.info(f"Rank {rank}: G_00 generated.")
@@ -1084,7 +1083,7 @@ def calculate_bk_sugi_box(
                 logging.info(
                     f"Rank {rank}: Calculating S3 shot noise contribution using analytical integration with effective k values on all triangle sides..."
                 )
-        if tracer_type == "abb":
+        if tracer_type in ["aba", "abb"]:
             return 0.0
         # The analytical S3 contraction is independent for each (i, j). We only
         # exploit this in full mode, where the k_bins^2 workload is large enough
@@ -1180,7 +1179,7 @@ def calculate_bk_sugi_box(
         return comm.bcast(s3_local if rank == 0 else None, root=0)
 
     def calculate_shot_noise_s3_box_fft():
-        if tracer_type == "abb":
+        if tracer_type in ["aba", "abb"]:
             if data_vector_mode == "full":
                 return np.zeros((k_bins, k_bins), dtype="complex128")
             return np.zeros(k_bins, dtype="complex128")
@@ -1402,9 +1401,14 @@ def calculate_bk_sugi_box(
         """
         The logic of this part can be found in our methodology paper. The Q_0 term is necessary.
         """
-        P_field = cfield_a[:] * np.conj(
-            cfield_a[:] if correlation_mode == "auto" else cfield_b[:]
-        )
+        if correlation_mode == "cross" and tracer_type == "aba":
+            # For aba, the i=k contraction leaves tracer_b on leg 2 and
+            # uses the repeated tracer_a pair: delta_b * N_a^*.
+            P_field = cfield_b[:] * np.conj(cfield_a[:])
+        else:
+            P_field = cfield_a[:] * np.conj(
+                cfield_a[:] if correlation_mode == "auto" else cfield_b[:]
+            )
         P_field *= boxsize.prod() ** 2
 
         if correlation_mode == "auto":
@@ -1444,6 +1448,13 @@ def calculate_bk_sugi_box(
                 elif correlation_mode == "cross" and tracer_type == "abb":
                     SN1 = (total_sum / k_num_k3)[: len(k_center)]
                     SN1 *= 2 * L + 1
+            if (
+                correlation_mode == "cross"
+                and tracer_type == "aba"
+                and [ell_1, ell_2, L] == [0, 0, 0]
+            ):
+                SN2 = (total_sum / k_num_k3)[: len(k_center)]
+                SN2 *= 2 * L + 1
 
             # Convert the 1d vector to (k1,k2) plane, note that SN1 is only related to k1, SN2 is only related to k2,
             if data_vector_mode == "full":
@@ -1497,7 +1508,7 @@ def calculate_bk_sugi_box(
         if correlation_mode == "auto":
             I_norm = (N_gal_a**3) / (boxsize.prod() ** 2)
         else:
-            if tracer_type == "aab":
+            if tracer_type in ["aab", "aba"]:
                 I_norm = (N_gal_a**2 * N_gal_b) / (boxsize.prod() ** 2)
             elif tracer_type == "abb":
                 I_norm = (N_gal_a * N_gal_b**2) / (boxsize.prod() ** 2)
@@ -1559,7 +1570,7 @@ def calculate_bk_sugi_survey(
     rfield_a, rfield_b, rfield_c, correlation_mode, stat_attrs, comm, **kwargs
 ):
     """
-    Survey-like Sugiyama bispectrum estimator (signal-only version).
+    Survey-like Sugiyama bispectrum estimator.
 
     Implementation notes
     --------------------
@@ -1577,7 +1588,7 @@ def calculate_bk_sugi_survey(
          upper triangle in full mode and fill lower triangle by transpose.
        - If tracer1 == tracer2 and ell_1 == ell_2 and swapped configuration
          (m2,m1,M) exists, reuse by transpose instead of recomputing.
-    4) Shot noise is intentionally disabled at this stage (all SN terms are zero).
+    4) Build the tracer-dependent shot-noise terms after the signal calculation.
     """
     rank = comm.Get_rank()
 
@@ -1650,10 +1661,12 @@ def calculate_bk_sugi_survey(
     k_eff_local = comm.bcast(k_eff, root=0)
 
     # Select the third tracer field for G_{L,M}.
-    if correlation_mode == "auto":
+    if correlation_mode == "auto" or tracer_type == "aba":
         rfield3 = rfield_a
+    elif tracer_type == "abc":
+        rfield3 = rfield_c
     else:
-        rfield3 = rfield_c if tracer_type == "abc" else rfield_b
+        rfield3 = rfield_b
 
     # ------------------------------------------------------------------
     # Step A: Prepare stream-style G_{L,M} evaluation.
@@ -2082,8 +2095,8 @@ def calculate_bk_sugi_survey(
     The tracer combination determines which of these objects are mathematically
     relevant:
     - abc: no repeated tracer, so all shot-noise terms must vanish
-    - aab: only the repeated tracer "a" contributes to the contraction, but the
-      delta-like leg comes from tracer_b
+    - aab/aba: only the repeated tracer "a" contributes to the contraction, but
+      the delta-like leg comes from tracer_b
     - abb: symmetric to aab, with repeated tracer "b"
     - aaa/auto: all same-tracer shot-noise pieces are potentially active
 
@@ -2111,8 +2124,8 @@ def calculate_bk_sugi_survey(
 
     # Requested logic:
     # 1) tracer_type == "abc": no repeated tracer => shot noise is exactly zero
-    # 2) tracer_type == "aab": the repeated tracer is "a", so use N_field_a, but
-    #    the delta-like leg entering the contraction is rfield_b
+    # 2) tracer_type in {"aab", "aba"}: the repeated tracer is "a", so use
+    #    N_field_a, but the delta-like leg entering the contraction is rfield_b
     # 3) tracer_type == "abb": symmetric case, use rfield_a together with N_field_b
     # 4) aaa/auto and any fallback case: use tracer_a for both ingredients
     if tracer_type == "abc":
@@ -2121,7 +2134,7 @@ def calculate_bk_sugi_survey(
             "SHOT",
             "tracer_type=abc -> skip rfield/N_field construction (shotnoise=0).",
         )
-    elif tracer_type == "aab":
+    elif tracer_type in ["aab", "aba"]:
         rfield_shot_b = rfield_b
         N_field_a = get_N_field(
             catalogs=catalogs,
@@ -2140,7 +2153,11 @@ def calculate_bk_sugi_survey(
             comm=comm,
             normalization_scheme=stat_attrs.get("normalization_scheme", "particle"),
         )
-        _log(1, "SHOT", "selection: use rfield_b + N_field_a for shot-noise terms.")
+        _log(
+            1,
+            "SHOT",
+            f"selection: tracer_type={tracer_type} uses rfield_b + N_field_a for shot-noise terms.",
+        )
     elif tracer_type == "abb":
         rfield_shot_a = rfield_a
         N_field_b = get_N_field(
@@ -2241,7 +2258,7 @@ def calculate_bk_sugi_survey(
         cfield_delta[:] *= boxsize.prod()
 
         # The S_LM ("Sbar") correction exists only for pure same-tracer auto
-        # statistics. For cross cases (aab/abb/abc) we intentionally skip it:
+        # statistics. For cross cases (aab/aba/abb/abc) we intentionally skip it:
         # there is no same-tracer disconnected piece of this form to subtract.
         use_sbar_term = correlation_mode == "auto" and tracer_type == "aaa"
         if use_sbar_term:
@@ -2410,11 +2427,11 @@ def calculate_bk_sugi_survey(
         branch and maps it to the requested data-vector layout. The math is the
         same in diagonal and full modes; only the set of (k1, k2) entries differs.
         """
-        if tracer_type == "abb":
+        if tracer_type in ["aba", "abb"]:
             _log(
                 1,
                 "SHOT-S3",
-                f"S3 forced to zero in mode={mode} because tracer_type=abb.",
+                f"S3 forced to zero in mode={mode} because tracer_type={tracer_type}.",
             )
             if mode == "full":
                 return np.zeros((k_bins, k_bins), dtype="complex128")
@@ -2502,7 +2519,7 @@ def calculate_bk_sugi_survey(
         once per implementation, so that the two results can be compared side by
         side without changing the rest of the estimator flow.
         """
-        if tracer_type == "abb":
+        if tracer_type in ["aba", "abb"]:
             if mode == "full":
                 return np.zeros((k_bins, k_bins), dtype="complex128")
             return np.zeros(k_bins, dtype="complex128")
@@ -2783,8 +2800,8 @@ def calculate_bk_sugi_survey(
     # Shot-noise assembly table for diagonal mode:
     # - SN0: only aaa with (ell1, ell2, L) = (0, 0, 0)
     # - SN1: aaa and abb when ell1 = L and ell2 = 0
-    # - SN2: only aaa with (0, 0, 0), and in that case SN2 = SN1
-    # - SN3: all cases except abb; for abc it is still forced to zero earlier
+    # - SN2: aaa and aba with (0, 0, 0); for aaa, SN2 = SN1
+    # - SN3: only aaa and aab
     #
     # The same logical content is repeated below for full mode, but SN1/SN2 are
     # expanded from 1d vectors onto the full (k1, k2) plane.
@@ -2801,14 +2818,14 @@ def calculate_bk_sugi_survey(
             rfield_shot = None
             N_field_shot = None
             S_LM_shot = None
-            if tracer_type == "aab":
+            if tracer_type in ["aab", "aba"]:
                 rfield_shot = rfield_shot_b
                 N_field_shot = N_field_a
                 S_LM_shot = stat_attrs.get("S_LM_a", None)
                 _log(
                     1,
                     "SHOT",
-                    "active tracer branch: aab -> rfield_shot=rfield_b, N_field_shot=N_field_a, S_LM_shot=S_LM_a",
+                    f"active tracer branch: {tracer_type} -> rfield_shot=rfield_b, N_field_shot=N_field_a, S_LM_shot=S_LM_a",
                 )
             elif tracer_type == "abb":
                 rfield_shot = rfield_shot_a
@@ -2862,8 +2879,9 @@ def calculate_bk_sugi_survey(
                     "SN1 set to 0 (requires tracer_type in {aaa,abb} and ell_1==L, ell_2==0).",
                 )
 
-            # S2 exists only in the fully same-tracer monopole case; in that
-            # limit it is identical to S1 and we explicitly reuse it.
+            # S2 is nonzero for aaa and for the i=k contraction in aba.
+            # Under the supported ell_1 >= ell_2 convention, the aba selection
+            # ell_1=0 and ell_2=L leaves only the (0,0,0) configuration.
             if tracer_type == "aaa" and (ell_1 == 0 and ell_2 == 0 and L == 0):
                 SN2 = SN1.copy()
                 _log(
@@ -2871,20 +2889,31 @@ def calculate_bk_sugi_survey(
                     "SHOT-S2",
                     "active: reuse SN1 because tracer_type=aaa and angu_config=(0,0,0).",
                 )
+            elif tracer_type == "aba" and (ell_1 == 0 and ell_2 == 0 and L == 0):
+                # At (0,0,0), the S2 one-leg kernel is identical to the existing
+                # S1-like kernel; only the selected fields differ (delta_b, N_a).
+                SN2 = calculate_shot_noise_S1_like(
+                    rfield_shot, N_field_shot, S_LM_shot
+                )
+                _log(
+                    1,
+                    "SHOT-S2",
+                    "active: tracer_type=aba and angu_config=(0,0,0), using rfield_b + N_field_a.",
+                )
             else:
                 SN2 = np.zeros(k_bins, dtype="complex128")
                 _log(
                     1,
                     "SHOT-S2",
-                    "set_to_zero: requires tracer_type=aaa and angu_config=(0,0,0).",
+                    "set_to_zero: requires tracer_type in {aaa,aba} and angu_config=(0,0,0).",
                 )
 
             # S3 is the only shot-noise term that can be evaluated by either the
             # analytical or FFT implementation. The tracer rules are:
-            # - abb: force to zero by construction
+            # - aba/abb: force to zero by construction
             # - abc: already zero because no repeated tracer exists
             # - aaa/aab: evaluate normally
-            if tracer_type != "abb":
+            if tracer_type in ["aaa", "aab"]:
                 if shotnoise_mode == "both":
                     if rank == 0:
                         _log(
@@ -2910,7 +2939,7 @@ def calculate_bk_sugi_survey(
             else:
                 SN3 = np.zeros(k_bins, dtype="complex128")
                 SN3_fft = np.zeros(k_bins, dtype="complex128") if shotnoise_mode == "both" else None
-                _log(1, "SHOT", "SN3 set to 0 because tracer_type=abb.")
+                _log(1, "SHOT", f"SN3 set to 0 because tracer_type={tracer_type}.")
     else:
         SN0 = 0.0 + 0.0j
         SN1 = np.zeros((k_bins, k_bins), dtype="complex128")
@@ -2924,14 +2953,14 @@ def calculate_bk_sugi_survey(
             rfield_shot = None
             N_field_shot = None
             S_LM_shot = None
-            if tracer_type == "aab":
+            if tracer_type in ["aab", "aba"]:
                 rfield_shot = rfield_shot_b
                 N_field_shot = N_field_a
                 S_LM_shot = stat_attrs.get("S_LM_a", None)
                 _log(
                     1,
                     "SHOT",
-                    "full mode branch: aab -> rfield_shot=rfield_b, N_field_shot=N_field_a, S_LM_shot=S_LM_a",
+                    f"full mode branch: {tracer_type} -> rfield_shot=rfield_b, N_field_shot=N_field_a, S_LM_shot=S_LM_a",
                 )
             elif tracer_type == "abb":
                 rfield_shot = rfield_shot_a
@@ -2997,12 +3026,23 @@ def calculate_bk_sugi_survey(
                     "SHOT-S2",
                     "full_mode active: reuse SN1_vec because tracer_type=aaa and angu_config=(0,0,0).",
                 )
+            elif tracer_type == "aba" and (ell_1 == 0 and ell_2 == 0 and L == 0):
+                # At (0,0,0), reuse the one-leg kernel with the aba field
+                # selection; the resulting vector depends on k2.
+                SN2_vec = calculate_shot_noise_S1_like(
+                    rfield_shot, N_field_shot, S_LM_shot
+                )
+                _log(
+                    1,
+                    "SHOT-S2",
+                    "full_mode active: tracer_type=aba and angu_config=(0,0,0), using rfield_b + N_field_a.",
+                )
             else:
                 SN2_vec = np.zeros(k_bins, dtype="complex128")
                 _log(
                     1,
                     "SHOT-S2",
-                    "full_mode set_to_zero: requires tracer_type=aaa and angu_config=(0,0,0).",
+                    "full_mode set_to_zero: requires tracer_type in {aaa,aba} and angu_config=(0,0,0).",
                 )
 
             for i in range(k_bins):
@@ -3011,7 +3051,7 @@ def calculate_bk_sugi_survey(
             # S3 in full mode follows exactly the same tracer logic as in
             # diagonal mode; the only difference is that the output is a full
             # (k1, k2) matrix.
-            if tracer_type != "abb":
+            if tracer_type in ["aaa", "aab"]:
                 if shotnoise_mode == "both":
                     if rank == 0:
                         _log(
@@ -3041,7 +3081,11 @@ def calculate_bk_sugi_survey(
                     if shotnoise_mode == "both"
                     else None
                 )
-                _log(1, "SHOT", "full mode SN3 set to 0 because tracer_type=abb.")
+                _log(
+                    1,
+                    "SHOT",
+                    f"full mode SN3 set to 0 because tracer_type={tracer_type}.",
+                )
     time_shotnoise_end = time.time()
     if rank == 0:
         logging.info(
@@ -3096,7 +3140,7 @@ def calculate_bk_sugi_survey(
     results = comm.bcast(results, root=0)
     if rank == 0:
         logging.info(
-            f"Rank {rank}: Finished survey bispectrum (signal-only) calculation."
+            f"Rank {rank}: Finished survey bispectrum calculation."
         )
     return results
 

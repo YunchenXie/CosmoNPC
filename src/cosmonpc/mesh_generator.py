@@ -586,9 +586,10 @@ def get_mesh_bk_survey(
     assert tracer_type in [
         "aaa",
         "aab",
+        "aba",
         "abb",
         "abc",
-    ], "tracer_type must be one of 'aaa', 'aab', 'abb', 'abc'."
+    ], "tracer_type must be one of 'aaa', 'aab', 'aba', 'abb', 'abc'."
     assert normalization_scheme in [
         "particle",
         "mesh",
@@ -759,7 +760,7 @@ def get_mesh_bk_survey(
                 keep_flags["a"]["keep_randoms_mesh"] = True
                 keep_flags["b"]["keep_randoms_mesh"] = True
                 keep_flags["c"]["keep_randoms_mesh"] = True
-            elif tracer_type == "aab":
+            elif tracer_type in ["aab", "aba"]:
                 # Correct formula: D_a * R_a * R_b
                 keep_flags["a"]["keep_data_mesh"] = True
                 keep_flags["a"]["keep_randoms_mesh"] = True
@@ -983,7 +984,7 @@ def get_mesh_bk_survey(
                 sub_I_mesh = vol_per_cell * (
                     np.sum(rfield_randoms_a * rfield_randoms_b * rfield_randoms_c)
                 )
-            elif tracer_type == "aab":
+            elif tracer_type in ["aab", "aba"]:
                 # Correct scheme: D_a * R_a * R_b
                 rfield_data_a = tracer_cache["a"]["rfield_data"]
                 rfield_randoms_a = tracer_cache["a"]["rfield_randoms"]
@@ -994,7 +995,7 @@ def get_mesh_bk_survey(
                     or (rfield_randoms_b is None)
                 ):
                     raise RuntimeError(
-                        "D_a, R_a and R_b meshes are required for tracer_type='aab'."
+                        f"D_a, R_a and R_b meshes are required for tracer_type='{tracer_type}'."
                     )
                 sub_I_mesh = vol_per_cell * (
                     np.sum(rfield_data_a * rfield_randoms_a * rfield_randoms_b)

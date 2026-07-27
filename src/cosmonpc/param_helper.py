@@ -74,9 +74,10 @@ def validate_tracer(tracer_type, correlation_mode):
     assert tracer_type in [
         "aaa",
         "aab",
+        "aba",
         "abb",
         "abc",
-    ], "tracer_type must be one of 'aaa', 'aab', 'abb', or 'abc'"
+    ], "tracer_type must be one of 'aaa', 'aab', 'aba', 'abb', or 'abc'"
     if correlation_mode == "auto":
         assert tracer_type == "aaa", "For auto-correlation, tracer_type must be 'aaa'"
 

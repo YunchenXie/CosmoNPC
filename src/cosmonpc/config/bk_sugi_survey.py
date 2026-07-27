@@ -6,7 +6,7 @@ CONFIG = {
     # Correlation
     "correlation_mode": "auto",  # ["auto" or "cross"]: Auto or cross correlation
     # Tracer type
-    "tracer_type": "aaa",  # ["aaa","aab","abb","abc"]
+    "tracer_type": "aaa",  # ["aaa","aab","aba","abb","abc"]
     # Geometry
     "geometry": "survey-like",  # "survey-like" or "box-like"
     # Catalogs, maximum 3 tracers for cross-correlation

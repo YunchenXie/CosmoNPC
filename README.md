@@ -23,8 +23,7 @@ Current focus:
 - `bk_sugi`
   - box-like
   - survey-like
-  - auto / cross
-  - `tracer_type` = `aaa`, `aab`, `abb`, `abc`
+  - auto (`aaa`) and cross (`aab`, `aba`, `abb`, `abc`)
   - `data_vector_mode` = `diagonal` or `full`
   - `shotnoise_mode` = `ana`, `fft`, or `both`
 
@@ -95,7 +94,7 @@ mpirun -n 4 python example.py
 - `statistic`: `pk` or `bk_sugi`
 - `geometry`: `box-like` or `survey-like`
 - `correlation_mode`: `auto` or `cross`
-- `tracer_type`: bispectrum tracer pattern such as `aaa`, `aab`, `abb`, `abc`
+- `tracer_type`: `aaa`, `aab`, `aba`, `abb`, or `abc` (the order identifies the three bispectrum legs)
 - `catalogs`: input file paths
 - `column_names`: catalog column mapping
 - `nmesh`: mesh size `[nx, ny, nz]`
@@ -125,6 +124,8 @@ Survey-like catalogs:
 - currently `.fits`
 - typical fields include `RA`, `DEC`, `Z`, `WEIGHT_FKP`, completeness weights, and `NZ`
 
+Preprocessed catalogs can also be passed directly through `catalogs` as structured NumPy arrays, without writing FITS or HDF5 files. They should contain `Position` and `WEIGHT`; survey catalogs additionally require `WEIGHT_FKP` and `NZ`. In MPI runs, each rank should pass its local rows.
+
 ## Output
 
 Results are written to `output_dir` as `.npy` dictionaries.
@@ -139,8 +140,8 @@ Typical outputs include:
 
 ## Technical Features
 
-- Symmetry-aware estimator design is used aggressively to reduce redundant work. The code exploits conjugate, swap, and tracer/leg symmetry whenever possible, especially in bispectrum loops.
-- The survey and box implementations include an analytical shot-noise treatment for the Sugiyama estimator, together with an FFT-based $S_{\ell_1\ell_2L}|_{i=j\neq k}$ evaluation path for cross-checking and comparison. The original Sugiyama shot-noise prescription is no longer the supported route in this code.
+- Symmetry-aware bispectrum loops reduce redundant calculations.
+- The box and survey Sugiyama estimators include tracer-dependent shot-noise corrections.
 - In `bk_sugi` full mode, `block_size` accelerates the calculation by trading memory for reuse: larger blocks keep more intermediate shell/binned fields in memory, so the code can reuse them across many `(k1, k2)` pairs instead of rebuilding them repeatedly.
 
 ## Notes

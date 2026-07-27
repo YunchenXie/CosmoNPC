@@ -127,6 +127,76 @@ def npy_reader(data_path, comm):
     return local_data
 
 
+def ascii_reader(comm, files, column_names):
+    """
+    Read whitespace-delimited ASCII catalogs in parallel across MPI ranks.
+    """
+    rank, size = comm.Get_rank(), comm.Get_size()
+    requested_columns = column_names or ["X", "Y", "Z"]
+    result = np.array([], dtype=[(col, "f8") for col in requested_columns])
+
+    for f in [files] if isinstance(files, str) else files:
+        nrows = 0
+        first_data = None
+        with open(f, "r") as fh:
+            for line in fh:
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#"):
+                    continue
+                nrows += 1
+                if first_data is None:
+                    first_data = stripped.split()
+
+        if first_data is None:
+            columns_to_read = []
+            ncols = 0
+        else:
+            ncols = len(first_data)
+            columns_to_read = requested_columns[: min(len(requested_columns), ncols)]
+        columns_to_read = comm.bcast(columns_to_read, root=0)
+        ncols = comm.bcast(ncols, root=0)
+
+        if rank == 0:
+            logging.info(
+                f"File: {f}, Total Rows: {nrows}, ASCII Columns: {ncols}, "
+                f"Columns to read: {columns_to_read}"
+            )
+
+        if len(columns_to_read) < 3:
+            raise ValueError(
+                f"ASCII catalog {f} must contain at least three columns for box-like positions."
+            )
+
+        base, extra = nrows // size, nrows % size
+        start = rank * base + min(rank, extra)
+        local_len = base + (1 if rank < extra else 0)
+        if local_len == 0:
+            local_data = np.array([], dtype=[(col, "f8") for col in columns_to_read])
+        else:
+            raw = np.loadtxt(
+                f,
+                usecols=range(len(columns_to_read)),
+                skiprows=start,
+                max_rows=local_len,
+                ndmin=2,
+            )
+            local_data = np.empty(local_len, dtype=[(col, "f8") for col in columns_to_read])
+            for idx, col in enumerate(columns_to_read):
+                local_data[col] = raw[:, idx]
+
+        if result.dtype.names != local_data.dtype.names:
+            result = result.astype(local_data.dtype, copy=False)
+        result = np.concatenate([result, local_data]) if len(result) > 0 else local_data
+
+    local_row_count = len(result)
+    total_row_count = comm.reduce(local_row_count, op=MPI.SUM, root=0)
+    if rank == 0:
+        logging.info(f"Total rows across all ranks: {total_row_count}")
+    logging.info(f"Rank {rank} read {local_row_count} rows")
+
+    return result
+
+
 def fits_reader(comm, files, column_names):
     """
     Read FITS files in parallel across all MPI ranks.
@@ -461,7 +531,14 @@ def catalog_reader(
     if rank == 0:
         logging.info(f"{'*' * 80}\nStart to read catalog: {catalog}")
 
-    supported_types = {"npy", "fits", "h5", "hdf5"}  # Supported file types for catalogs
+    supported_types = {
+        "npy",
+        "fits",
+        "h5",
+        "hdf5",
+        "dat",
+        "txt",
+    }  # Supported file types for catalogs
     data_path = catalog  # could be a single file or a list of files
 
     # Determine the file extension
@@ -514,12 +591,14 @@ def catalog_reader(
                         "WEIGHT column does not exist in the list. Setting WEIGHT to 1.0"
                     )
 
-        elif data_ext == "fits" or data_ext in ["h5", "hdf5"]:
+        elif data_ext == "fits" or data_ext in ["h5", "hdf5", "dat", "txt"]:
             # raise NotImplementedError("Box-like geometry with .fits file is not yet implemented.")
             if data_ext == "fits":
                 data_arr = fits_reader(comm, catalog, column_names)
             elif data_ext in ["h5", "hdf5"]:
                 data_arr = h5_reader(comm, catalog, column_names)
+            elif data_ext in ["dat", "txt"]:
+                data_arr = ascii_reader(comm, catalog, column_names)
 
             # Create a structured ndarray directly using the keys from data_arr
             data_cat = np.zeros(
